@@ -1,0 +1,10 @@
+old-version/
+.git/
+.env
+.env.*
+!.env.example
+secrets/
+data/
+README.md
+Makefile
+docker-compose.yml
