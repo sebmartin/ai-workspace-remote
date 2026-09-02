@@ -1,0 +1,17 @@
+# Reference copy of the previous over-SMB setup. Never committed.
+old-version/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+secrets/
+id_*
+!id_*.pub
+known_hosts
+
+# Local state, if anyone points the data paths inside the checkout
+data/
+
+*.log
+.DS_Store
