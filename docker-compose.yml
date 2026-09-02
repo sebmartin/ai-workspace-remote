@@ -1,0 +1,99 @@
+x-env: &env
+  WORKSPACE_UID: ${WORKSPACE_UID:-1000}
+  WORKSPACE_GID: ${WORKSPACE_GID:-1000}
+  TZ: ${TZ:-UTC}
+
+services:
+
+  claude-remote:
+    build:
+      context: ./claude
+      args:
+        WORKSPACE_UID: ${WORKSPACE_UID:-1000}
+        WORKSPACE_GID: ${WORKSPACE_GID:-1000}
+    image: ai-workspace-remote-claude
+    container_name: ai-workspace-claude
+    restart: unless-stopped
+
+    # The device name in claude.ai. Claude Code registers with os.hostname()
+    # and nothing else overrides it. Unset gives you the container ID.
+    # Changing it needs a recreate, not a restart.
+    hostname: ${CLAUDE_HOSTNAME:-ai-workspace}
+
+    # tini as PID 1, so SIGTERM is not discarded and a stop does not wait out
+    # the grace period and SIGKILL mid-transcript.
+    init: true
+    tty: true
+    stdin_open: true
+
+    volumes:
+      - ${WORKSPACE_HOST_PATH:?}:/workspace
+      - ${CLAUDE_HOME_HOST_PATH:?}/.claude:/home/claude/.claude
+      - ${CLAUDE_HOME_HOST_PATH:?}/.claude.json:/home/claude/.claude.json
+
+    # CMD in the image hardcodes the mode; overriding it here is what makes
+    # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
+    command: ["claude", "remote-control", "--permission-mode", "${CLAUDE_PERMISSION_MODE:-auto}"]
+
+    environment:
+      <<: *env
+      PLUGIN_NAME: ${PLUGIN_NAME:-}
+      PLUGIN_REPO: ${PLUGIN_REPO:-}
+      PLUGIN_REF: ${PLUGIN_REF:-}
+
+  samba:
+    build: ./samba
+    image: ai-workspace-remote-samba
+    container_name: ai-workspace-samba
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${SMB_BIND_IP:-0.0.0.0}:445:445"
+    volumes:
+      - ${WORKSPACE_HOST_PATH:?}:/workspace
+    # Rebuilt from the environment every boot, so no stale credential file.
+    tmpfs:
+      - /var/lib/samba
+      - /run/samba
+    environment:
+      <<: *env
+    # Mounted at /run/secrets/smb_password, so it stays out of the
+    # environment and out of `docker inspect`.
+    secrets:
+      - smb_password
+
+  backup:
+    build: ./backup
+    image: ai-workspace-remote-backup
+    container_name: ai-workspace-backup
+    restart: unless-stopped
+    init: true
+    # Runs as the workspace owner, so nothing it writes into .git is
+    # root-owned and unwritable by Claude afterwards.
+    user: "${WORKSPACE_UID:-1000}:${WORKSPACE_GID:-1000}"
+    stop_grace_period: 60s
+    volumes:
+      - ${WORKSPACE_HOST_PATH:?}:/workspace
+      - ${BACKUP_STATE_HOST_PATH:?}:/backup
+      - ${CLAUDE_HOME_HOST_PATH:?}/.claude:/claude-home:ro
+      - ${NAS_SSH_KEY_HOST_PATH:?}:/run/aiwr/id:ro
+      - ${NAS_KNOWN_HOSTS_HOST_PATH:?}:/run/aiwr/known_hosts:ro
+    tmpfs:
+      - /tmp:mode=1777
+    environment:
+      <<: *env
+      NAS_HOST: ${NAS_HOST:?}
+      NAS_PORT: ${NAS_PORT:-22}
+      NAS_USER: ${NAS_USER:?}
+      NAS_PATH: ${NAS_PATH:?}
+      NAS_TRANSCRIPTS_PATH: ${NAS_TRANSCRIPTS_PATH:?}
+      BACKUP_COMMIT_CRON: ${BACKUP_COMMIT_CRON:-7 * * * *}
+    # A silent 3am failure otherwise goes unnoticed.
+    healthcheck:
+      test: ["CMD", "/opt/aiwr/healthcheck.sh"]
+      interval: 300s
+      start_period: 120s
+
+secrets:
+  smb_password:
+    file: ${SMB_PASSWORD_FILE:-./secrets/smb_password}
