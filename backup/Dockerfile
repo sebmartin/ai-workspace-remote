@@ -30,6 +30,12 @@ RUN curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPE
  && chmod +x "supercronic-linux-${SUPERCRONIC_ARCH}" \
  && mv "supercronic-linux-${SUPERCRONIC_ARCH}" /usr/local/bin/supercronic
 
+# Set here, not in the entrypoint: `docker compose exec` inherits the image
+# environment, not PID 1's, so a manually invoked job would otherwise have no
+# git identity and no writable HOME.
+ENV HOME=/tmp \
+    GIT_CONFIG_GLOBAL=/backup/gitconfig
+
 COPY --chmod=755 entrypoint.sh /opt/aiwr/entrypoint.sh
 COPY --chmod=755 scripts/ /opt/aiwr/
 

@@ -75,6 +75,8 @@ There is no registry and no separate image-publishing step.
 - A Linux Docker host with Compose v2.
 - A workspace directory that is already a git repository.
 - Somewhere to back up to, reachable over SSH. Any box that accepts rsync.
+- An `amd64` host. The backup image pins supercronic to that architecture;
+  building elsewhere means changing two build args in `backup/Dockerfile`.
 - `jq` on the host if you want `make plugins`.
 
 ## Quick start
@@ -82,7 +84,8 @@ There is no registry and no separate image-publishing step.
 Clone this onto the Docker host and run it there.
 
 ```bash
-git clone <this repo> && cd ai-workspace-remote
+git clone https://github.com/sebmartin/ai-workspace-remote.git
+cd ai-workspace-remote
 cp .env.example .env
 $EDITOR .env               # see "Required settings" below
 
@@ -160,7 +163,7 @@ Do not disable SMB signing or encryption on the client to "fix" performance.
 
 **Windows.** Nothing here blocks a Windows client. `vfs_fruit` only engages
 when a client negotiates the Apple extensions, so it stays out of the way.
-Two things in [samba/smb.conf.tmpl](samba/smb.conf.tmpl) are worth changing
+Two things in [samba/smb.conf](samba/smb.conf) are worth changing
 if Windows is a first-class client: add `Thumbs.db` and `desktop.ini` to
 `veto files`, and lower `server min protocol` if you need to support anything
 older than Windows 8, which is where SMB3 and encryption arrived.
@@ -220,8 +223,10 @@ make that work, and all three are easy to break:
   with `/` replaced by `-`, so `/workspace` becomes `-workspace`. It is
   hardcoded rather than offered as a setting, because changing it would
   orphan every existing session.
-- **The whole home directory is persisted**, not just `~/.claude`. Transcripts,
-  credentials, plugin state and `~/.claude.json` all live there.
+- **`~/.claude` and `~/.claude.json` are persisted.** Transcripts,
+  credentials and plugin state live in the first, onboarding and trust in the
+  second. `~/.local` is not persisted, so a recreate reverts Claude to the
+  image's version.
 - **`init: true` plus `exec`.** Without tini, `claude` is PID 1 and discards
   SIGTERM, so every stop waits out the grace period and then SIGKILLs
   mid-transcript.
@@ -236,16 +241,32 @@ Check what is on disk with:
 docker compose exec claude-remote ls ~/.claude/projects/-workspace/
 ```
 
-### Why the home is one directory mount
+### How the home is mounted, and the hazard in it
 
-The obvious setup is to bind-mount `~/.claude` and `~/.claude.json`
-separately. Do not: `~/.claude.json` is rewritten atomically, as write-temp
-then `rename`. A single-file bind mount pins an *inode*, and `rename`
-installs a **new** one. After the first rewrite the container keeps reading
-the old orphaned inode while the host sees the new file. They diverge
-silently. If the host path does not exist beforehand, Docker also creates a
-*directory* there and config parsing fails confusingly. Mounting the parent
-directory has neither problem.
+Two paths are bind-mounted individually, `~/.claude` and `~/.claude.json`,
+rather than the home directory as a whole. Mounting the whole home would be
+better in one respect and impossible in another: it would hide
+`/home/claude/.local`, where the image installs Claude and `uv`, and the
+container would come up with no `claude` on `PATH`. Claude's native installer
+only ever installs into `$HOME` and takes no install-dir override, so there is
+no quick way around that.
+
+The cost is real and worth knowing. `~/.claude.json` is rewritten atomically,
+as write-temp-then-`rename`. A single-file bind mount pins an *inode*, and
+`rename` installs a new one, so after the first rewrite the container can be
+reading the old orphaned inode while the host has the new file. This is the
+same shape the previous setup ran with, so it is a known-lived-with hazard
+rather than a new one, but it is a hazard.
+
+Two consequences follow from `~/.local` not being persisted:
+
+- A `docker compose up -d` recreate reverts Claude to the version baked into
+  the image, discarding any background auto-update. Since the README tells you
+  to recreate whenever `CLAUDE_HOSTNAME` changes, expect that.
+- `make rebuild` is how you actually move the baked-in version forward.
+
+The fix, when it is worth the effort, is to install Claude and `uv` outside
+the home and mount the home as one directory.
 
 ## Backup and restore
 
@@ -266,30 +287,40 @@ diff. Yesterday's half-finished edits become unreachable the moment the ref
 moves, and the weekly `gc` reclaims them. When the worktree is clean the ref
 just points at `HEAD`.
 
+That reclamation is immediate in the bare repo. In the workspace repo the same
+`gc` uses git's default two-week prune expiry, because the lock only
+serialises this container's own jobs and you may be running git in there at
+the time, so superseded objects linger a little longer on that side.
+
 That bounds the cost. A naive append-only snapshot chain would keep every
 intermediate state the agent ever wrote, forever, and the only way back would
 be rewriting history. Here nothing accumulates, so the schedule is free to be
 as frequent as you like.
 
-An idle tick does nothing at all. If the uncommitted state is identical to
-what the ref already points at, the existing commit is reused rather than a
-new sha minted for the same tree, so the ref does not move, nothing is
-pushed, and the mirror has nothing to ship. Without that, a timestamped
-commit message alone would churn the ref every hour of a quiet week.
+An idle tick does nothing at all. Both commit dates are pinned to the
+parent's and the message carries no timestamp, so an unchanged tree hashes to
+the same commit every run. The ref does not move, the push is a no-op and the
+mirror has nothing to ship, with no bookkeeping needed to work that out.
 
 The job uses git plumbing against a private index, so it never touches your
-checked-out branch, your index or `HEAD`, and there is no local `backup`
-branch to get in the way. It pushes to the bare repo by path rather than
-through a configured remote, because a remote keeps a tracking ref whose
+checked-out branch, your index or `HEAD`, and cannot collide with a git
+command you run in the workspace. It pushes to the bare repo by path rather
+than through a configured remote, because a remote keeps a tracking ref whose
 reflog records every force-push, and those entries would hold every
-superseded commit alive in the workspace repo. It cannot collide with a git command you run in the
-workspace. Real branches are pushed with `--all` and fast-forward only, so a
-rewritten upstream history surfaces as an error rather than being clobbered.
-The `backup` ref is force-pushed, because rewriting it is the point.
+superseded commit alive in the workspace repo.
 
-`push --all` still runs on every tick, because a commit you make by hand
-moves a ref without touching a single file and would otherwise never leave
-this disk. It is a no-op when there is nothing new.
+The `backup` ref is force-pushed first, then real branches with `--all`,
+fast-forward only. Order matters: `--all` legitimately fails after you amend
+or rebase a branch that has already been backed up, and pushing it first would
+take the snapshot down with it. The job refuses to run if a local branch named
+`backup` exists, since that would collide with the ref it force-pushes.
+
+`push --all` runs on every tick, because a commit you make by hand moves a
+ref without touching a single file and would otherwise never leave this disk.
+It is a no-op when there is nothing new. The job also keeps the bare repo's
+`HEAD` pointing at the same branch as the workspace, since `git init --bare`
+leaves it at `refs/heads/master` and a clone of the restored copy would
+otherwise check out nothing.
 
 **The backup target only has to accept rsync.** All the git work happens on
 local disk and the NAS receives plain files it never interprets, so it needs
@@ -343,13 +374,13 @@ Try that once before you trust any of this.
 ## Operations
 
 ```bash
-make ps          # status and health of all three containers
+make ps          # container status, plus the backup container's health
 make logs        # follow
 make restart     # restart claude-remote, which is the whole update ritual
 make plugins     # which plugin version and ref is live
 make backup-now  # force a snapshot and a mirror
 make rebuild     # refresh base images and apt packages
-make check       # validate compose, shell scripts and smb.conf
+make check       # validate the compose file and the shell scripts
 make env         # keys in .env.example missing from your .env
 ```
 
@@ -390,6 +421,12 @@ Oplocks and SMB2 leases are disabled so a client cannot serve stale cached
 data for a tree the container writes behind Samba's back, but that prevents
 stale reads, not lost updates. There is no fix at this layer. The hourly
 snapshot is the safety net.
+
+**The agent can delete the workspace's git history.** `.git` lives inside the
+tree and the backup container runs as the same uid Claude does, so nothing
+prevents it. The bare repo on the same disk and the NAS copy, up to an hour
+stale, are the recovery. Moving the git directory somewhere the session cannot
+reach is real work and is deferred.
 
 **One disk holds the live copy.** The Docker host's disk is a single point of
 failure. The backup is an hourly RPO plus git's integrity checking, not

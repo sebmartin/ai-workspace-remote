@@ -9,6 +9,12 @@ fail() { echo "unhealthy: $*"; exit 1; }
 
 [ -f "${STATE_DIR}/corrupt" ] && fail "bare repo marked corrupt at $(cat "${STATE_DIR}/corrupt"); mirroring is blocked"
 
+for job in commit mirror transcripts maintain; do
+  if [ -f "${STATE_DIR}/failed_${job}" ]; then
+    fail "${job} failed: $(cat "${STATE_DIR}/failed_${job}")"
+  fi
+done
+
 now="$(date +%s)"
 # Before a job has ever succeeded, measure from container start rather than
 # from the epoch, so a slow first run is not reported as a failure.
@@ -24,9 +30,11 @@ check() {
   fi
 }
 
-# Just over two hours for the hourly snapshot, 48 hours for the rsyncs.
+# Just over two hours for the hourly snapshot, 48 hours for the rsyncs,
+# ten days for the weekly gc.
 check commit       8000
 check mirror      172800
 check transcripts 172800
+check maintain    864000
 
 echo "healthy"

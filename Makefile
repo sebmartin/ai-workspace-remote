@@ -59,7 +59,7 @@ backup-now: ## Run a snapshot and a mirror immediately
 	docker compose exec backup /opt/aiwr/commit.sh
 	docker compose exec backup /opt/aiwr/mirror.sh
 
-check: ## Validate compose, shell scripts and the samba config
+check: ## Validate the compose file and the shell scripts
 	docker compose config -q && echo "compose: ok"
 	@command -v shellcheck >/dev/null 2>&1 \
 	  && shellcheck -x claude/entrypoint.sh samba/entrypoint.sh backup/entrypoint.sh backup/scripts/*.sh \

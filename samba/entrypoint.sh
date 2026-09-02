@@ -16,12 +16,14 @@ SMB_SHARE_NAME=workspace
 
 [ -d /workspace ] || die missing_workspace "/workspace is not mounted"
 
-# Match the workspace owner so force user/group resolves to the right ids.
-if ! getent group "${WORKSPACE_GID}" >/dev/null 2>&1; then
-  groupadd -g "${WORKSPACE_GID}" "${SMB_USER}"
+# smb.conf names the user and group, so both names must exist regardless of
+# whether the base image already uses those ids. -o permits a duplicate id,
+# which is what happens when WORKSPACE_GID collides with, say, `users`.
+if ! getent group "${SMB_USER}" >/dev/null 2>&1; then
+  groupadd -o -g "${WORKSPACE_GID}" "${SMB_USER}"
 fi
-if ! getent passwd "${WORKSPACE_UID}" >/dev/null 2>&1; then
-  useradd -u "${WORKSPACE_UID}" -g "${WORKSPACE_GID}" \
+if ! getent passwd "${SMB_USER}" >/dev/null 2>&1; then
+  useradd -o -u "${WORKSPACE_UID}" -g "${WORKSPACE_GID}" \
           -M -d /workspace -s /usr/sbin/nologin "${SMB_USER}"
 fi
 

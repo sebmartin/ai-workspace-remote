@@ -82,8 +82,10 @@ run() {
   record_success
 }
 
-with_lock "${TRANSCRIPTS_LOCK}" run
-rc=$?
+# `|| rc=$?` puts the call in a condition context. Without it errexit
+# fires the ERR trap on a lock timeout and the handling below is dead.
+rc=0
+with_lock "${TRANSCRIPTS_LOCK}" run || rc=$?
 if [ $rc -eq 75 ]; then
   warn skipped "reason=lock_held"
   exit 0

@@ -10,10 +10,6 @@ WORKSPACE="/workspace"
 BACKUP_GIT_DIR="/backup/workspace.git"
 STATE_DIR="/backup/state"
 
-# There is no passwd entry for a numeric `user:`, so nothing can be inferred.
-export HOME=/tmp
-export GIT_CONFIG_GLOBAL=/backup/gitconfig
-
 for tool in git rsync ssh flock timeout supercronic; do
   command -v "${tool}" >/dev/null 2>&1 || die missing_tool "${tool} is not installed"
 done
@@ -41,13 +37,17 @@ fi
 [ -s /run/aiwr/known_hosts ] || die empty_known_hosts \
   "/run/aiwr/known_hosts is empty; run: ssh-keyscan -p ${NAS_PORT:-22} ${NAS_HOST:-<nas>} > secrets/known_hosts"
 
-if [ ! -d "${BACKUP_GIT_DIR}" ]; then
-  log info init_bare "path=${BACKUP_GIT_DIR}"
-  git init --bare -q "${BACKUP_GIT_DIR}"
-fi
-
 if [ ! -d "${WORKSPACE}/.git" ]; then
   die not_a_repo "${WORKSPACE} is not a git repository; run 'git init' there first"
+fi
+
+if [ ! -d "${BACKUP_GIT_DIR}" ]; then
+  # -b main because git still defaults a new repo to master, and a bare repo
+  # whose HEAD names a ref that never appears clones with no checkout at all.
+  # commit.sh syncs HEAD to the workspace's real branch on every run; this
+  # only has to be right for the window before its first one.
+  log info init_bare "path=${BACKUP_GIT_DIR}"
+  git init --bare -q -b main "${BACKUP_GIT_DIR}"
 fi
 
 CRONTAB=/tmp/crontab

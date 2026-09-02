@@ -31,6 +31,10 @@ services:
       - ${CLAUDE_HOME_HOST_PATH:?}/.claude:/home/claude/.claude
       - ${CLAUDE_HOME_HOST_PATH:?}/.claude.json:/home/claude/.claude.json
 
+    # CMD in the image hardcodes the mode; overriding it here is what makes
+    # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
+    command: ["claude", "remote-control", "--permission-mode", "${CLAUDE_PERMISSION_MODE:-auto}"]
+
     environment:
       <<: *env
       PLUGIN_NAME: ${PLUGIN_NAME:-}

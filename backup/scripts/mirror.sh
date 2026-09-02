@@ -44,8 +44,10 @@ run() {
   record_success
 }
 
-with_lock "${GIT_LOCK}" run
-rc=$?
+# `|| rc=$?` puts the call in a condition context. Without it errexit
+# fires the ERR trap on a lock timeout and the handling below is dead.
+rc=0
+with_lock "${GIT_LOCK}" run || rc=$?
 if [ $rc -eq 75 ]; then
   # Unlike commit, a mirror that cannot get the lock is a real problem: it
   # runs rarely and skipping one means a much older copy on the NAS.
