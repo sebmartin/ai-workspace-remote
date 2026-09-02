@@ -74,20 +74,20 @@ run() {
   # A live session's .jsonl is being appended while rsync reads it, so a copy
   # can end mid-line. JSONL tolerates that - the partial record is discarded
   # on read and the next run picks up the complete file.
-  timeout 900 rsync -a --partial --timeout=600 --prune-empty-dirs --stats \
+  # Output to a file, not a pipe: `rsync | grep || true` would discard the
+  # exit status and report a failed transfer as a success.
+  timeout 900 rsync -a --partial-dir=.rsync-partial --timeout=600 \
+    --prune-empty-dirs --stats \
     -e "${ssh}" "${FILTER[@]}" \
-    "${SRC}/" "${dest}/" | grep -E '^(Number of regular files transferred|Total transferred)' || true
+    "${SRC}/" "${dest}/" > /tmp/transcripts.out
+  grep -E '^(Number of regular files transferred|Total transferred)' /tmp/transcripts.out || true
 
   info mirrored "dest=${dest}"
   record_success
 }
 
-# `|| rc=$?` puts the call in a condition context. Without it errexit
-# fires the ERR trap on a lock timeout and the handling below is dead.
-rc=0
-with_lock "${TRANSCRIPTS_LOCK}" run || rc=$?
-if [ $rc -eq 75 ]; then
-  warn skipped "reason=lock_held"
-  exit 0
-fi
-exit $rc
+# Take the lock first, then call the job bare so errexit still applies to it.
+# The next tick retries, and a lock held long enough to matter shows up as
+# staleness in the healthcheck.
+take_lock "${TRANSCRIPTS_LOCK}" || { warn skipped "reason=lock_held"; exit 0; }
+run

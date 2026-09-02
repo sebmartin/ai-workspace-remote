@@ -21,10 +21,16 @@ export GIT_INDEX_FILE="${STATE_DIR}/snapshot.index"
 run() {
   local head tree target
 
-  # Keep the bare repo's HEAD pointing at the same branch as the workspace.
-  # `git init --bare` leaves it at refs/heads/master, and nothing else ever
-  # sets it, so a clone of the restored copy checks out nothing at all.
-  git_bare symbolic-ref HEAD "$(git_ws symbolic-ref HEAD)"
+  # Keep the bare repo's HEAD pointing at the same branch as the workspace,
+  # since `git init --bare` leaves it at refs/heads/master and a clone of the
+  # restored copy would check out nothing. Skipped on a detached HEAD, where
+  # there is no branch to name and symbolic-ref exits non-zero.
+  local ws_head
+  if ws_head="$(git_ws symbolic-ref -q HEAD)"; then
+    git_bare symbolic-ref HEAD "${ws_head}"
+  else
+    warn detached_head "not syncing the bare repo's HEAD"
+  fi
 
   if git_ws show-ref -q --verify "refs/heads/${BRANCH}"; then
     log error branch_collision \
@@ -71,14 +77,8 @@ run() {
   record_success
 }
 
-# `|| rc=$?` puts the call in a condition context. Without it errexit
-# fires the ERR trap on a lock timeout and the handling below is dead.
-rc=0
-with_lock "${GIT_LOCK}" run || rc=$?
-if [ $rc -eq 75 ]; then
-  # Another git job holds the lock. The next tick retries, and a lock held
-  # long enough to matter shows up as staleness in the healthcheck.
-  warn skipped "reason=lock_held"
-  exit 0
-fi
-exit $rc
+# Take the lock first, then call the job bare so errexit still applies to it.
+# The next tick retries, and a lock held long enough to matter shows up as
+# staleness in the healthcheck.
+take_lock "${GIT_LOCK}" || { warn skipped "reason=lock_held"; exit 0; }
+run

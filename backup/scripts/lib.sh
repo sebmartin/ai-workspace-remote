@@ -36,14 +36,16 @@ record_failure() {
 
 # One lock for the three git jobs, so a gc can never run during a mirror and
 # a long mirror can never race a commit.
-with_lock() {
-  local lockfile="$1"; shift
+#
+# This only takes the lock. It deliberately does not run the job for you: a
+# function invoked in a condition context has errexit disabled for its whole
+# call tree, so wrapping the job that way would silently let it continue past
+# a failed command and reach record_success. Callers do `take_lock || ...`
+# and then call the job bare.
+take_lock() {
   mkdir -p "${STATE_DIR}"
-  exec 9>"${lockfile}"
-  if ! flock -w "${LOCK_WAIT}" 9; then
-    return 75   # EX_TEMPFAIL: caller decides whether that is fatal
-  fi
-  "$@"
+  exec 9>"$1"
+  flock -w "${LOCK_WAIT}" 9
 }
 
 ssh_cmd() {

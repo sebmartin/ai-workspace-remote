@@ -25,8 +25,11 @@ run() {
   # directory can land refs before the objects they point at, or delete a
   # pack that the new refs still need - leaving the copy unclonable, and
   # permanently so if the source disk dies inside that window.
+  # --partial-dir, not bare --partial: a resumable chunk belongs in a scratch
+  # directory, not left in place under the real filename where git would read
+  # it as a truncated pack.
   info pass1 "dest=${dest}"
-  timeout 900 rsync -a --partial --timeout=600 -e "${ssh}" \
+  timeout 900 rsync -a --partial-dir=.rsync-partial --timeout=600 -e "${ssh}" \
     --exclude='refs/***' \
     --exclude='packed-refs' \
     --exclude='HEAD' \
@@ -34,25 +37,22 @@ run() {
     --exclude='*.lock' \
     "${BACKUP_GIT_DIR}/" "${dest}/"
 
+  # Output to a file rather than a pipe. `rsync | grep || true` discards the
+  # exit status pipefail preserved, so a failed transfer would report success.
   info pass2 "dest=${dest}"
-  timeout 900 rsync -a --delete-after --partial --timeout=600 --stats -e "${ssh}" \
+  timeout 900 rsync -a --delete-after --partial-dir=.rsync-partial --timeout=600 --stats \
+    -e "${ssh}" \
+    --exclude='.rsync-partial' \
     --exclude='objects/tmp_*' \
     --exclude='*.lock' \
-    "${BACKUP_GIT_DIR}/" "${dest}/" | grep -E '^(Total transferred|Total file size)' || true
+    "${BACKUP_GIT_DIR}/" "${dest}/" > /tmp/mirror.out
+  grep -E '^(Total transferred|Total file size)' /tmp/mirror.out || true
 
   info mirrored "dest=${dest}"
   record_success
 }
 
-# `|| rc=$?` puts the call in a condition context. Without it errexit
-# fires the ERR trap on a lock timeout and the handling below is dead.
-rc=0
-with_lock "${GIT_LOCK}" run || rc=$?
-if [ $rc -eq 75 ]; then
-  # Unlike commit, a mirror that cannot get the lock is a real problem: it
-  # runs rarely and skipping one means a much older copy on the NAS.
-  log error lock_timeout "waited=${LOCK_WAIT}s"
-  record_failure 75
-  exit 1
-fi
-exit $rc
+# Unlike the snapshot, a job this infrequent failing to get the lock is a
+# real problem rather than something the next tick fixes.
+take_lock "${GIT_LOCK}" || { log error lock_timeout "waited=${LOCK_WAIT}s"; record_failure 75; exit 1; }
+run

@@ -128,7 +128,11 @@ These are the things that otherwise cost an hour.
    or Docker creates a directory there and Claude fails confusingly.
    `make dirs` creates it.
 
-3. **SSH key for the NAS.** A dedicated passphraseless key, and a populated
+3. **The backup path's parent must exist on the NAS.** rsync creates only the
+   final component, so `mkdir -p` the directory above `NAS_PATH` and
+   `NAS_TRANSCRIPTS_PATH` before the first mirror.
+
+4. **SSH key for the NAS.** A dedicated passphraseless key, and a populated
    known_hosts, because `StrictHostKeyChecking` is on and a cron job cannot
    answer a trust prompt:
 
@@ -142,11 +146,11 @@ These are the things that otherwise cost an hour.
    Consider restricting the key on the NAS side with a `command=` prefix in
    `authorized_keys` so it can only run rsync into the backup path.
 
-4. **The workspace filesystem must support extended attributes.** ext4, xfs
+5. **The workspace filesystem must support extended attributes.** ext4, xfs
    and btrfs are fine. Samba's `streams_xattr` needs `user.*` xattrs, so
    pointing `WORKSPACE_HOST_PATH` at an NFS mount would break the share.
 
-5. **Add a `.gitignore` to the workspace** before the commit job starts, or
+6. **Add a `.gitignore` to the workspace** before the commit job starts, or
    the backup history fills up with `.DS_Store` and editor state churn.
 
 ## Connecting over SMB

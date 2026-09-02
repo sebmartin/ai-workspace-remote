@@ -35,13 +35,7 @@ run() {
   record_success
 }
 
-# `|| rc=$?` puts the call in a condition context. Without it errexit
-# fires the ERR trap on a lock timeout and the handling below is dead.
-rc=0
-with_lock "${GIT_LOCK}" run || rc=$?
-if [ $rc -eq 75 ]; then
-  log error lock_timeout "waited=${LOCK_WAIT}s"
-  record_failure 75
-  exit 1
-fi
-exit $rc
+# Unlike the snapshot, a job this infrequent failing to get the lock is a
+# real problem rather than something the next tick fixes.
+take_lock "${GIT_LOCK}" || { log error lock_timeout "waited=${LOCK_WAIT}s"; record_failure 75; exit 1; }
+run

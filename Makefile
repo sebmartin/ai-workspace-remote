@@ -14,7 +14,8 @@ help: ## Show this help
 
 dirs: ## Create the host directories with the right ownership
 	sudo mkdir -p $(WORKSPACE_HOST_PATH) $(CLAUDE_HOME_HOST_PATH)/.claude $(BACKUP_STATE_HOST_PATH)
-	sudo touch $(CLAUDE_HOME_HOST_PATH)/.claude.json
+	test -s $(CLAUDE_HOME_HOST_PATH)/.claude.json || \
+	  printf '{}' | sudo tee $(CLAUDE_HOME_HOST_PATH)/.claude.json >/dev/null
 	sudo chown -R $(WORKSPACE_UID):$(WORKSPACE_GID) \
 	  $(WORKSPACE_HOST_PATH) $(CLAUDE_HOME_HOST_PATH) $(BACKUP_STATE_HOST_PATH)
 
@@ -49,8 +50,10 @@ ps: ## Show container status and health
 shell: ## Shell into claude-remote
 	docker compose exec claude-remote bash
 
-login: ## Shell into Claude to run /login
-	docker compose exec -it claude-remote claude
+# `run`, not `exec`: before the first login the service exits and restarts,
+# so there is no running container to exec into.
+login: ## Run Claude to do the one-time /login
+	docker compose run --rm claude-remote claude
 
 plugins: ## Show which plugin and ref is actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'

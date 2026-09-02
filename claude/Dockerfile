@@ -18,6 +18,10 @@ ENV PATH=/home/claude/.local/bin:$PATH
 # Plugin fetches go over https, so no key material is needed.
 RUN git config --global url."https://github.com/".insteadOf git@github.com:
 
+# Both installers below are fetched unpinned, on purpose. `make rebuild` is
+# the documented way to move versions forward, and pinning would mean editing
+# this file to get a security fix.
+#
 # uv: the ai-workspace plugin's MCP server runs `uv run --script`.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
