@@ -1,9 +1,23 @@
+# No `export` here, deliberately. Exported values reach compose's environment,
+# which takes precedence over the `.env` compose reads itself, and make keeps
+# the whitespace before an inline `# comment`, so a padded value would win.
+# Nothing below needs them exported.
 -include .env
-export
 
 SMB_PASSWORD_FILE ?= ./secrets/smb_password
 WORKSPACE_UID     ?= 1000
 WORKSPACE_GID     ?= 1000
+
+# Same trailing-whitespace hazard, on this side of the fence. A value written
+# with an inline comment reaches the recipes below padded, where unquoted it
+# word-splits into extra arguments and quoted it names a padded path. Strip
+# once here, quote at every use.
+WORKSPACE_HOST_PATH    := $(strip $(WORKSPACE_HOST_PATH))
+CLAUDE_HOME_HOST_PATH  := $(strip $(CLAUDE_HOME_HOST_PATH))
+BACKUP_STATE_HOST_PATH := $(strip $(BACKUP_STATE_HOST_PATH))
+SMB_PASSWORD_FILE      := $(strip $(SMB_PASSWORD_FILE))
+WORKSPACE_UID          := $(strip $(WORKSPACE_UID))
+WORKSPACE_GID          := $(strip $(WORKSPACE_GID))
 
 .PHONY: help dirs smb-password up down restart rebuild logs ps shell login \
         plugins backup-now check env
@@ -13,20 +27,20 @@ help: ## Show this help
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 dirs: ## Create the host directories with the right ownership
-	sudo mkdir -p $(WORKSPACE_HOST_PATH) $(CLAUDE_HOME_HOST_PATH)/.claude $(BACKUP_STATE_HOST_PATH)
-	test -s $(CLAUDE_HOME_HOST_PATH)/.claude.json || \
-	  printf '{}' | sudo tee $(CLAUDE_HOME_HOST_PATH)/.claude.json >/dev/null
-	sudo chown -R $(WORKSPACE_UID):$(WORKSPACE_GID) \
-	  $(WORKSPACE_HOST_PATH) $(CLAUDE_HOME_HOST_PATH) $(BACKUP_STATE_HOST_PATH)
+	sudo mkdir -p "$(WORKSPACE_HOST_PATH)" "$(CLAUDE_HOME_HOST_PATH)/.claude" "$(BACKUP_STATE_HOST_PATH)"
+	test -s "$(CLAUDE_HOME_HOST_PATH)/.claude.json" || \
+	  printf '{}' | sudo tee "$(CLAUDE_HOME_HOST_PATH)/.claude.json" >/dev/null
+	sudo chown -R "$(WORKSPACE_UID):$(WORKSPACE_GID)" \
+	  "$(WORKSPACE_HOST_PATH)" "$(CLAUDE_HOME_HOST_PATH)" "$(BACKUP_STATE_HOST_PATH)"
 
 smb-password: ## Generate a random SMB password if there isn't one yet
-	@mkdir -p $(dir $(SMB_PASSWORD_FILE))
-	@test -s $(SMB_PASSWORD_FILE) || { \
-	  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 > $(SMB_PASSWORD_FILE); \
-	  chmod 600 $(SMB_PASSWORD_FILE); \
+	@mkdir -p "$(dir $(SMB_PASSWORD_FILE))"
+	@test -s "$(SMB_PASSWORD_FILE)" || { \
+	  LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 > "$(SMB_PASSWORD_FILE)"; \
+	  chmod 600 "$(SMB_PASSWORD_FILE)"; \
 	  echo "wrote a new password to $(SMB_PASSWORD_FILE)"; }
 	@echo "SMB user: claude"
-	@echo "password: $$(cat $(SMB_PASSWORD_FILE))"
+	@echo "password: $$(cat "$(SMB_PASSWORD_FILE)")"
 
 up: ## Build anything stale and start the stack
 	docker compose up -d --build
