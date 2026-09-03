@@ -106,19 +106,41 @@ That gives you two ways in, independent of each other. Use either, or both.
 
 | variable | what it is |
 |---|---|
-| `WORKSPACE_HOST_PATH` | the workspace tree, a git repo |
-| `CLAUDE_HOME_HOST_PATH` | Claude Code's home: auth, transcripts, plugins |
-| `BACKUP_STATE_HOST_PATH` | local bare repo, locks, job heartbeats |
-| `WORKSPACE_UID` / `WORKSPACE_GID` | owner of all three, and the uid every container aligns to |
+| `AIWR_ROOT` | one directory holding everything this stack owns |
+| `WORKSPACE_UID` / `WORKSPACE_GID` | owner of that tree, and the uid every container aligns to |
 | `SMB_PASSWORD_FILE` | path to a file holding the share password |
-| `NAS_HOST` / `NAS_USER` / `NAS_PATH` / `NAS_TRANSCRIPTS_PATH` | backup destination |
+| `NAS_HOST` / `NAS_USER` / `NAS_ROOT` | backup destination |
+
+`AIWR_ROOT` is the only host path you set. `make dirs` builds this under it:
+
+```
+$AIWR_ROOT/
+  workspace/   the git repo, shared over SMB, where the agent works
+  home/        Claude's home, so .claude/ and .claude.json
+  backup/      local bare repo and job state, staging for the NAS mirror
+```
+
+`home/` is a sibling of `workspace/` and not a child, deliberately. Inside the
+workspace it would be committed, shared over SMB and mirrored to the NAS.
+
+One root also means one value to change to stand up a second, fully isolated
+stack, which is how to try this out without pointing anything at a workspace
+you care about. Note that the three services set `container_name`, so a test
+stack and a real one cannot run at the same time.
 
 ## First run checklist
 
 These are the things that otherwise cost an hour.
 
-1. **Ownership.** All three host directories must be owned by
-   `WORKSPACE_UID:WORKSPACE_GID`. `make dirs` does it.
+1. **Ownership and mode.** The tree must be owned by
+   `WORKSPACE_UID:WORKSPACE_GID`, and `make dirs` also sets `AIWR_ROOT` itself
+   to 0700. That last part is the perimeter. Claude writes
+   `.credentials.json`, `.claude.json` and the session transcripts 0600, but
+   leaves `~/.claude` itself 0755 and `settings.json` 0644, and `settings.json`
+   can carry an `env` block with API keys. The mode
+   on the root means you do not have to keep auditing what is written beneath
+   it. The cost is that browsing the tree on the host now needs `sudo` or the
+   workspace uid, so use the share.
 
 2. **Log in once.** `make login` drops you into Claude inside the container.
    Run `/login`, and accept the workspace trust prompt. Both persist in the
@@ -128,9 +150,10 @@ These are the things that otherwise cost an hour.
    or Docker creates a directory there and Claude fails confusingly.
    `make dirs` creates it.
 
-3. **The backup path's parent must exist on the NAS.** rsync creates only the
-   final component, so `mkdir -p` the directory above `NAS_PATH` and
-   `NAS_TRANSCRIPTS_PATH` before the first mirror.
+3. **`NAS_ROOT` must exist on the NAS.** rsync creates only the final
+   component of a path, so `mkdir -p` `NAS_ROOT` itself before the first
+   mirror. The mirror's second pass runs with `--delete-after`, so it is worth
+   confirming that path is what you think before anything runs.
 
 4. **SSH key for the NAS.** A dedicated passphraseless key, and a populated
    known_hosts, because `StrictHostKeyChecking` is on and a cron job cannot
@@ -148,7 +171,7 @@ These are the things that otherwise cost an hour.
 
 5. **The workspace filesystem must support extended attributes.** ext4, xfs
    and btrfs are fine. Samba's `streams_xattr` needs `user.*` xattrs, so
-   pointing `WORKSPACE_HOST_PATH` at an NFS mount would break the share.
+   pointing `AIWR_ROOT` at an NFS mount would break the share.
 
 6. **Add a `.gitignore` to the workspace** before the commit job starts, or
    the backup history fills up with `.DS_Store` and editor state churn.
@@ -407,12 +430,12 @@ share - move it in rather than starting empty.
 
 1. Stop anything that writes to it, and unmount it everywhere it is mounted,
    so nothing writes into the source mid-copy.
-2. `rsync -a` the old workspace to `WORKSPACE_HOST_PATH`, then `chown -R` it.
+2. `rsync -a` the old workspace to `$AIWR_ROOT/workspace`, then `chown -R` it.
 3. Run `git status && git log --oneline -5 && git fsck`. All clean before you
    go on. Then `git gc`. A repo that has lived on a network filesystem for
    months will usually repack down a long way.
 4. Add a `.gitignore` to the workspace.
-5. Move the old `~/.claude` and `~/.claude.json` into `CLAUDE_HOME_HOST_PATH`
+5. Move the old `~/.claude` and `~/.claude.json` into `$AIWR_ROOT/home`
    so auth, sessions and plugin state carry over.
 6. `make up`, then work through the checks above.
 7. Only then rename the old copy rather than deleting it, and leave it a week.
@@ -425,6 +448,12 @@ Oplocks and SMB2 leases are disabled so a client cannot serve stale cached
 data for a tree the container writes behind Samba's back, but that prevents
 stale reads, not lost updates. There is no fix at this layer. The hourly
 snapshot is the safety net.
+
+**`$AIWR_ROOT/backup` is not your backup.** It is a bare repo on the same
+disk as the workspace, and that is the point: git does its ref locking and
+object work on local disk, so the NAS only ever receives plain files and never
+needs git installed. If the disk dies they both die, and the copy under
+`NAS_ROOT` is what you restore from.
 
 **The agent can delete the workspace's git history.** `.git` lives inside the
 tree and the backup container runs as the same uid Claude does, so nothing

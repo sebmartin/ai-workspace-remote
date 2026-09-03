@@ -12,12 +12,10 @@ WORKSPACE_GID     ?= 1000
 # with an inline comment reaches the recipes below padded, where unquoted it
 # word-splits into extra arguments and quoted it names a padded path. Strip
 # once here, quote at every use.
-WORKSPACE_HOST_PATH    := $(strip $(WORKSPACE_HOST_PATH))
-CLAUDE_HOME_HOST_PATH  := $(strip $(CLAUDE_HOME_HOST_PATH))
-BACKUP_STATE_HOST_PATH := $(strip $(BACKUP_STATE_HOST_PATH))
-SMB_PASSWORD_FILE      := $(strip $(SMB_PASSWORD_FILE))
-WORKSPACE_UID          := $(strip $(WORKSPACE_UID))
-WORKSPACE_GID          := $(strip $(WORKSPACE_GID))
+AIWR_ROOT         := $(strip $(AIWR_ROOT))
+SMB_PASSWORD_FILE := $(strip $(SMB_PASSWORD_FILE))
+WORKSPACE_UID     := $(strip $(WORKSPACE_UID))
+WORKSPACE_GID     := $(strip $(WORKSPACE_GID))
 
 .PHONY: help dirs smb-password up down restart rebuild logs ps shell login \
         plugins backup-now check env
@@ -26,12 +24,24 @@ help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-dirs: ## Create the host directories with the right ownership
-	sudo mkdir -p "$(WORKSPACE_HOST_PATH)" "$(CLAUDE_HOME_HOST_PATH)/.claude" "$(BACKUP_STATE_HOST_PATH)"
-	test -s "$(CLAUDE_HOME_HOST_PATH)/.claude.json" || \
-	  printf '{}' | sudo tee "$(CLAUDE_HOME_HOST_PATH)/.claude.json" >/dev/null
-	sudo chown -R "$(WORKSPACE_UID):$(WORKSPACE_GID)" \
-	  "$(WORKSPACE_HOST_PATH)" "$(CLAUDE_HOME_HOST_PATH)" "$(BACKUP_STATE_HOST_PATH)"
+# 0700 on the root is the whole perimeter, and it is not recursive because
+# what lives underneath is git's and Claude's business. Claude writes
+# .credentials.json, .claude.json and the transcripts 0600, but leaves
+# ~/.claude itself 0755 and settings.json 0644, and settings.json can carry an
+# env block with API keys.
+# The guard matters because an empty AIWR_ROOT would otherwise mkdir -p and
+# chown at the filesystem root, and `/` would chmod 700 the whole box.
+dirs: ## Create the host directory tree, owned by the workspace uid and 0700
+	@case "$(AIWR_ROOT)" in \
+	  /?*) ;; \
+	  *) echo "AIWR_ROOT must be an absolute path below /, got '$(AIWR_ROOT)'."; \
+	     echo "If it is empty, run: cp .env.example .env"; exit 1 ;; \
+	esac
+	sudo mkdir -p "$(AIWR_ROOT)/workspace" "$(AIWR_ROOT)/home/.claude" "$(AIWR_ROOT)/backup"
+	test -s "$(AIWR_ROOT)/home/.claude.json" || \
+	  printf '{}' | sudo tee "$(AIWR_ROOT)/home/.claude.json" >/dev/null
+	sudo chown -R "$(WORKSPACE_UID):$(WORKSPACE_GID)" "$(AIWR_ROOT)"
+	sudo chmod 700 "$(AIWR_ROOT)"
 
 smb-password: ## Generate a random SMB password if there isn't one yet
 	@mkdir -p "$(dir $(SMB_PASSWORD_FILE))"

@@ -1,3 +1,11 @@
+# Every host path this stack owns lives under AIWR_ROOT, so there is one
+# directory to create, chown and lock down, and one value to change to point a
+# whole stack at a different tree:
+#
+#   ${AIWR_ROOT}/workspace  the git repo, mounted at /workspace everywhere
+#   ${AIWR_ROOT}/home       Claude's home, .claude/ and .claude.json
+#   ${AIWR_ROOT}/backup     bare repo and job state, staging for the mirror
+
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
   WORKSPACE_GID: ${WORKSPACE_GID:-1000}
@@ -27,9 +35,9 @@ services:
     stdin_open: true
 
     volumes:
-      - ${WORKSPACE_HOST_PATH:?}:/workspace
-      - ${CLAUDE_HOME_HOST_PATH:?}/.claude:/home/claude/.claude
-      - ${CLAUDE_HOME_HOST_PATH:?}/.claude.json:/home/claude/.claude.json
+      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?}/home/.claude:/home/claude/.claude
+      - ${AIWR_ROOT:?}/home/.claude.json:/home/claude/.claude.json
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
@@ -50,7 +58,7 @@ services:
     ports:
       - "${SMB_BIND_IP:-0.0.0.0}:445:445"
     volumes:
-      - ${WORKSPACE_HOST_PATH:?}:/workspace
+      - ${AIWR_ROOT:?}/workspace:/workspace
     # Rebuilt from the environment every boot, so no stale credential file.
     tmpfs:
       - /var/lib/samba
@@ -73,9 +81,11 @@ services:
     user: "${WORKSPACE_UID:-1000}:${WORKSPACE_GID:-1000}"
     stop_grace_period: 60s
     volumes:
-      - ${WORKSPACE_HOST_PATH:?}:/workspace
-      - ${BACKUP_STATE_HOST_PATH:?}:/backup
-      - ${CLAUDE_HOME_HOST_PATH:?}/.claude:/claude-home:ro
+      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?}/backup:/backup
+      # Only .claude, not the whole home, so .claude.json is not merely
+      # excluded from the transcript filter but absent from this container.
+      - ${AIWR_ROOT:?}/home/.claude:/claude-home:ro
       - ${NAS_SSH_KEY_HOST_PATH:?}:/run/aiwr/id:ro
       - ${NAS_KNOWN_HOSTS_HOST_PATH:?}:/run/aiwr/known_hosts:ro
     tmpfs:
@@ -85,8 +95,8 @@ services:
       NAS_HOST: ${NAS_HOST:?}
       NAS_PORT: ${NAS_PORT:-22}
       NAS_USER: ${NAS_USER:?}
-      NAS_PATH: ${NAS_PATH:?}
-      NAS_TRANSCRIPTS_PATH: ${NAS_TRANSCRIPTS_PATH:?}
+      NAS_PATH: ${NAS_ROOT:?}/workspace.git
+      NAS_TRANSCRIPTS_PATH: ${NAS_ROOT:?}/claude-home
       BACKUP_COMMIT_CRON: ${BACKUP_COMMIT_CRON:-7 * * * *}
     # A silent 3am failure otherwise goes unnoticed.
     healthcheck:
