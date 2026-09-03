@@ -87,31 +87,29 @@ Clone this onto the Docker host and run it there.
 git clone https://github.com/sebmartin/ai-workspace-remote.git
 cd ai-workspace-remote
 cp .env.example .env
-$EDITOR .env               # see "Required settings" below
-
-make dirs                  # create host paths with the right ownership
-make smb-password          # generate the SMB password, prints it once
-make up                    # builds the images and starts the stack
-make login                 # one-time: run /login inside the container
+$EDITOR .env       # four values, see below
+make init          # everything else, or it tells you what is wrong
+make up
+make login         # one-time: run /login inside the container
 ```
 
-That gives you two ways in, independent of each other. Use either, or both.
+`make init` is idempotent. Run it again any time to re-check a setup.
 
-- **claude.ai or the mobile app**, to work with the agent. The device shows
-  up once the container is running.
-- **`smb://<host>/workspace`**, to read and edit the files by hand in Finder
-  or an editor. Skip it if you never want to touch the files directly.
+### The four values
 
-### Required settings
+`.env` answers two questions. Where does everything live, and how do I reach
+the backup.
 
 | variable | what it is |
 |---|---|
 | `AIWR_ROOT` | one directory holding everything this stack owns |
-| `WORKSPACE_UID` / `WORKSPACE_GID` | owner of that tree, and the uid every container aligns to |
-| `SMB_PASSWORD_FILE` | path to a file holding the share password |
-| `NAS_HOST` / `NAS_USER` / `NAS_ROOT` | backup destination |
+| `NAS_HOST` / `NAS_USER` / `NAS_ROOT` | where the backup is mirrored to, over SSH |
 
-`AIWR_ROOT` is the only host path you set. `make dirs` builds this under it:
+Everything else in `.env` has a working default and can be left alone.
+`WORKSPACE_UID` and `WORKSPACE_GID` are written by `make init` from whoever
+runs it, so they always match the files on disk.
+
+`make init` builds this under `AIWR_ROOT`:
 
 ```
 $AIWR_ROOT/
@@ -123,63 +121,65 @@ $AIWR_ROOT/
 `home/` is a sibling of `workspace/` and not a child, deliberately. Inside the
 workspace it would be committed, shared over SMB and mirrored to the NAS.
 
+`backup/` is not your backup. It is a bare repo on the same disk as the
+workspace, which is the point: git does its ref locking and object work on
+local disk, so the NAS only ever receives plain files and never needs git. If
+the disk dies they both die, and the copy under `NAS_ROOT` is what you restore
+from.
+
 One root also means one value to change to stand up a second, fully isolated
 stack, which is how to try this out without pointing anything at a workspace
-you care about. Note that the three services set `container_name`, so a test
-stack and a real one cannot run at the same time.
+you care about. The three services set `container_name`, so a test stack and a
+real one cannot run at the same time.
 
-## First run checklist
+### What init does, and the two things it cannot
 
-These are the things that otherwise cost an hour.
+It creates the tree, sets ownership and mode, makes `workspace/` a git repo if
+it is empty, writes a starter `.gitignore` and `.claude.json`, generates the
+SMB password and the NAS SSH key, scans the NAS host key, and confirms the
+backup target is reachable. It stops with a named problem rather than doing
+half of it.
 
-1. **Ownership and mode.** The tree must be owned by
-   `WORKSPACE_UID:WORKSPACE_GID`, and `make dirs` also sets `AIWR_ROOT` itself
-   to 0700. That last part is the perimeter. Claude writes
-   `.credentials.json`, `.claude.json` and the session transcripts 0600, but
-   leaves `~/.claude` itself 0755 and `settings.json` 0644, and `settings.json`
-   can carry an `env` block with API keys. The mode
-   on the root means you do not have to keep auditing what is written beneath
-   it. The cost is that browsing the tree on the host now needs `sudo` or the
-   workspace uid, so use the share.
+Two steps need a human. `ssh-copy-id` needs your NAS password, and `/login`
+needs a browser. `init` prints the first when it is still outstanding.
 
-2. **Log in once.** `make login` drops you into Claude inside the container.
-   Run `/login`, and accept the workspace trust prompt. Both persist in the
-   mounted `.claude`.
+### Two things worth knowing
 
-   `.claude.json` must exist as a file on the host before the first start,
-   or Docker creates a directory there and Claude fails confusingly.
-   `make dirs` creates it.
+**Change anything in `.env`, then run `make up`.** Every setting is either a
+volume mount, a port, a hostname, a command or an environment variable, and all
+of those are fixed when a container is created. Nothing needs a rebuild.
+`make restart` does neither, which is why it is only for picking up a new
+Claude version or new commits on the same plugin ref.
 
-3. **`NAS_ROOT` must exist on the NAS.** rsync creates only the final
-   component of a path, so `mkdir -p` `NAS_ROOT` itself before the first
-   mirror. The mirror's second pass runs with `--delete-after`, so it is worth
-   confirming that path is what you think before anything runs.
-
-4. **SSH key for the NAS.** A dedicated passphraseless key, and a populated
-   known_hosts, because `StrictHostKeyChecking` is on and a cron job cannot
-   answer a trust prompt:
-
-   ```bash
-   mkdir -p secrets
-   ssh-keygen -t ed25519 -N '' -f secrets/id_backup
-   ssh-keyscan -p 22 nas.example > secrets/known_hosts
-   ssh-copy-id -i secrets/id_backup.pub backup@nas.example
-   ```
-
-   Consider restricting the key on the NAS side with a `command=` prefix in
-   `authorized_keys` so it can only run rsync into the backup path.
-
-5. **The workspace filesystem must support extended attributes.** ext4, xfs
-   and btrfs are fine. Samba's `streams_xattr` needs `user.*` xattrs, so
-   pointing `AIWR_ROOT` at an NFS mount would break the share.
-
-6. **Add a `.gitignore` to the workspace** before the commit job starts, or
-   the backup history fills up with `.DS_Store` and editor state churn.
+**The workspace filesystem needs `user.*` extended attributes.** ext4, xfs and
+btrfs are fine. Samba's `streams_xattr` needs them, so pointing `AIWR_ROOT` at
+an NFS mount would break the share.
 
 ## Connecting over SMB
 
 The share is tuned for macOS and Linux clients. SMB3 is the floor and
 encryption is required, which both handle natively.
+
+### Choosing your own password
+
+`make init` generates one into `secrets/smb_password`. To use your own, edit
+that file after init has created it:
+
+```bash
+$EDITOR secrets/smb_password
+docker compose restart samba
+```
+
+Editing in place keeps the mode at 0600, and so does a shell redirect onto the
+existing file. Creating the file from scratch would leave it 0644. Prefer an
+editor over `echo mypassword > ...`, which puts the password in your shell
+history. A trailing newline is fine, because the entrypoint reads the file with
+a command substitution that strips it. A trailing space is not.
+
+`make init` never overwrites a password that already exists. Samba rebuilds its
+passdb from the file on every boot, which is why a restart applies a change.
+
+### Connecting
 
 On macOS, connect with **⌘K → `smb://<host>/workspace`**, user `claude`. The
 share will not appear in Finder's sidebar. That is deliberate: NetBIOS is
@@ -405,10 +405,10 @@ make ps          # container status, plus the backup container's health
 make logs        # follow
 make restart     # restart claude-remote, which is the whole update ritual
 make plugins     # which plugin version and ref is live
+make init        # set up, or re-check, everything .env describes
 make backup-now  # force a snapshot and a mirror
 make rebuild     # refresh base images and apt packages
 make check       # validate the compose file and the shell scripts
-make env         # keys in .env.example missing from your .env
 ```
 
 `make up` builds anything stale and starts the stack, so it is also how you
@@ -428,16 +428,21 @@ occasionally.
 If you already have a workspace somewhere else - a laptop directory, a network
 share - move it in rather than starting empty.
 
+Do it between `make init` and `make up`.
+
 1. Stop anything that writes to it, and unmount it everywhere it is mounted,
    so nothing writes into the source mid-copy.
-2. `rsync -a` the old workspace to `$AIWR_ROOT/workspace`, then `chown -R` it.
+2. `rsync -a` the old workspace over `$AIWR_ROOT/workspace`, including its
+   `.git`. Copy from the NAS to the Docker host directly rather than through a
+   laptop that has the share mounted.
 3. Run `git status && git log --oneline -5 && git fsck`. All clean before you
    go on. Then `git gc`. A repo that has lived on a network filesystem for
    months will usually repack down a long way.
-4. Add a `.gitignore` to the workspace.
-5. Move the old `~/.claude` and `~/.claude.json` into `$AIWR_ROOT/home`
+4. Move the old `~/.claude` and `~/.claude.json` into `$AIWR_ROOT/home`
    so auth, sessions and plugin state carry over.
-6. `make up`, then work through the checks above.
+5. `make init` again. It fixes ownership and modes over what you copied in, and
+   leaves the repo and the `.gitignore` alone now that they exist.
+6. `make up`.
 7. Only then rename the old copy rather than deleting it, and leave it a week.
 
 ## Known limitations
