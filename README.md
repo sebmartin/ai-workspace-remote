@@ -89,19 +89,18 @@ Clone this onto the Docker host and run it there.
 ```bash
 git clone https://github.com/sebmartin/ai-workspace-remote.git
 cd ai-workspace-remote
-cp .env.example .env
-$EDITOR .env       # two values, see below
-make init          # everything else, or it tells you what is wrong
+make init          # asks for what it needs, then does the rest
 make up
 make login         # one-time: run /login inside the container
 ```
 
-`make init` is idempotent. Run it again any time to re-check a setup.
+`make init` creates `.env` for you and asks for anything it cannot work out. It
+is idempotent, so run it again any time to re-check a setup.
 
-### The two values
+### What it asks for
 
-`.env` answers two questions. Where does everything live, and where does the
-backup go.
+Two things, because everything else in `.env` has a working default. Where does
+everything live, and where does the backup go.
 
 | variable | what it is |
 |---|---|

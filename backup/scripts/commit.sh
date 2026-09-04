@@ -19,6 +19,12 @@ BRANCH=backup
 
 # A private index, so this never touches the one you use. /tmp is a tmpfs and
 # a fresh index costs only a slower first `add -A`.
+#
+# A fixed name is safe here. It only has to be unique inside one container's
+# own tmpfs, and this is the only thing that writes it. If two runs ever did
+# overlap, say an hourly tick landing on a `make backup-now`, git takes an
+# index.lock of its own and the second run fails loudly rather than producing
+# a half-merged tree.
 export GIT_INDEX_FILE=/tmp/snapshot.index
 
 run() {

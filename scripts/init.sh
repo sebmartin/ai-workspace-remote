@@ -136,11 +136,23 @@ echo
 echo "Setting up secrets/"
 mkdir -p secrets && chmod 700 secrets
 if [ ! -s secrets/smb_password ]; then
-  # pipefail off for this one line: head closes the pipe at 24 bytes, tr takes
-  # SIGPIPE, and the pipeline would otherwise report failure for working right.
-  ( umask 077; set +o pipefail
-    LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 > secrets/smb_password )
-  did "generated the SMB password"
+  smb_pw=""
+  if [ -t 0 ]; then
+    printf '\nThe SMB share needs a password. Leave it blank to have one generated.\n'
+    read -r -s -p "SMB password for user 'claude': " smb_pw
+    printf '\n'
+  fi
+  if [ -n "${smb_pw}" ]; then
+    ( umask 077; printf '%s' "${smb_pw}" > secrets/smb_password )
+    did "set the SMB password"
+  else
+    # pipefail off for this one line: head closes the pipe at 24 bytes, tr takes
+    # SIGPIPE, and the pipeline would otherwise report failure for working right.
+    ( umask 077; set +o pipefail
+      LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24 > secrets/smb_password )
+    did "generated an SMB password"
+  fi
+  unset smb_pw
 fi
 ok "SMB user 'claude', password in secrets/smb_password"
 
