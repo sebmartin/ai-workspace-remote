@@ -4,7 +4,9 @@
 #
 #   ${AIWR_ROOT}/workspace  the git repo, mounted at /workspace everywhere
 #   ${AIWR_ROOT}/home       Claude's home, .claude/ and .claude.json
-#   ${AIWR_ROOT}/backup     bare repo and job state, staging for the mirror
+#
+# The backup itself is not under that root. BACKUP_MOUNT names a directory on
+# storage the OS has mounted, and it arrives at /backup in the backup container.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -14,11 +16,9 @@ x-env: &env
 services:
 
   claude-remote:
-    build:
-      context: ./claude
-      args:
-        WORKSPACE_UID: ${WORKSPACE_UID:-1000}
-        WORKSPACE_GID: ${WORKSPACE_GID:-1000}
+    # No build args. The uid is applied at startup, not baked in, so changing
+    # it in .env needs a recreate like every other setting and never a rebuild.
+    build: ./claude
     image: ai-workspace-remote-claude
     container_name: ai-workspace-claude
     restart: unless-stopped
@@ -82,21 +82,14 @@ services:
     stop_grace_period: 60s
     volumes:
       - ${AIWR_ROOT:?}/workspace:/workspace
-      - ${AIWR_ROOT:?}/backup:/backup
+      - ${BACKUP_MOUNT:?}:/backup
       # Only .claude, not the whole home, so .claude.json is not merely
       # excluded from the transcript filter but absent from this container.
       - ${AIWR_ROOT:?}/home/.claude:/claude-home:ro
-      - ${NAS_SSH_KEY_HOST_PATH:?}:/run/aiwr/id:ro
-      - ${NAS_KNOWN_HOSTS_HOST_PATH:?}:/run/aiwr/known_hosts:ro
     tmpfs:
       - /tmp:mode=1777
     environment:
       <<: *env
-      NAS_HOST: ${NAS_HOST:?}
-      NAS_PORT: ${NAS_PORT:-22}
-      NAS_USER: ${NAS_USER:?}
-      NAS_PATH: ${NAS_ROOT:?}/workspace.git
-      NAS_TRANSCRIPTS_PATH: ${NAS_ROOT:?}/claude-home
       BACKUP_COMMIT_CRON: ${BACKUP_COMMIT_CRON:-7 * * * *}
     # A silent 3am failure otherwise goes unnoticed.
     healthcheck:
@@ -106,4 +99,4 @@ services:
 
 secrets:
   smb_password:
-    file: ${SMB_PASSWORD_FILE:-./secrets/smb_password}
+    file: ./secrets/smb_password

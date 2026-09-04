@@ -1,18 +1,18 @@
 FROM debian:trixie-slim
 
-ARG WORKSPACE_UID=1000
-ARG WORKSPACE_GID=1000
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq less openssh-client procps \
+      ca-certificates curl git jq less openssh-client passwd procps util-linux \
       python3 python3-venv ripgrep fd-find tree unzip vim-tiny \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd
 
-RUN groupadd -g "${WORKSPACE_GID}" claude \
- && useradd -m -u "${WORKSPACE_UID}" -g "${WORKSPACE_GID}" -s /bin/bash claude
+# A placeholder uid. The entrypoint moves the user to whatever .env says at
+# startup, so this number never leaves the image and never needs a rebuild.
+RUN groupadd -g 1000 claude \
+ && useradd -m -u 1000 -g 1000 -s /bin/bash claude
 
 USER claude
+ENV HOME=/home/claude
 ENV PATH=/home/claude/.local/bin:$PATH
 
 # Plugin fetches go over https, so no key material is needed.
@@ -29,6 +29,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 # breaks background auto-update for a non-root user.
 RUN curl -fsSL https://claude.ai/install.sh | bash -s stable
 
+# Back to root so the entrypoint can align the uid before dropping to claude.
+USER root
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace

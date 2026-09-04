@@ -7,6 +7,23 @@
 # repo and ref into its manifest. Same path whether or not a ref is pinned.
 set -uo pipefail
 
+# Starts as root so the container's user can be moved to whoever owns the files
+# on the host, then drops and re-enters this script as that user. The uid is not
+# baked into the image, so changing it in .env needs no rebuild.
+if [ "$(id -u)" = "0" ]; then
+  want_uid="${WORKSPACE_UID:-1000}"
+  want_gid="${WORKSPACE_GID:-1000}"
+  if [ "$(id -u claude)" != "${want_uid}" ] || [ "$(id -g claude)" != "${want_gid}" ]; then
+    groupmod -o -g "${want_gid}" claude
+    usermod  -o -u "${want_uid}" -g "${want_gid}" claude
+    # Only what the image owns. Everything under ~/.claude is a bind mount that
+    # the host already owns, and recursing into it would be slow and pointless.
+    chown "${want_uid}:${want_gid}" /home/claude
+    chown -R "${want_uid}:${want_gid}" /home/claude/.local /home/claude/.gitconfig 2>/dev/null
+  fi
+  exec setpriv --reuid="${want_uid}" --regid="${want_gid}" --init-groups -- "$0" "$@"
+fi
+
 MARKET=aiwr
 MARKET_DIR=~/.claude/aiwr-marketplace
 
