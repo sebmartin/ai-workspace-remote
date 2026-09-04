@@ -41,9 +41,9 @@ login: ## Run Claude to do the one-time /login
 plugins: ## Show which plugin and ref is actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'
 
-backup-now: ## Run a snapshot and a mirror immediately
+backup-now: ## Run a snapshot and a transcript copy immediately
 	docker compose exec backup /opt/aiwr/commit.sh
-	docker compose exec backup /opt/aiwr/mirror.sh
+	docker compose exec backup /opt/aiwr/transcripts.sh
 
 check: ## Validate the compose file and the shell scripts
 	docker compose config -q && echo "compose: ok"

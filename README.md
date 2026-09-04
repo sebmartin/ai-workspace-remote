@@ -17,8 +17,9 @@ Move it to a machine that is always running and those problems go away:
   going whether or not your laptop is awake.
 - **Still just files.** The workspace is exported over SMB, so you browse and
   edit it from a desktop with any editor, exactly as if it were local.
-- **Backed up off the box.** A git snapshot goes to a second machine over SSH
-  on a schedule, to a NAS or anything else you can rsync to.
+- **Backed up.** A git snapshot goes on a schedule to whatever storage you
+  mount for it: a NAS share, a second internal disk, a USB enclosure. Nothing
+  has to be installed on it.
 - **Not corrupted.** The agent works on local disk, not a network mount. A
   workspace is a git repo, and git over SMB or NFS gets stale `.lock` files
   and non-atomic renames. That damage is silent, and you find it when you
@@ -37,26 +38,24 @@ flowchart TB
         smb["samba"]
         bk["backup"]
         ws[("/workspace<br>local disk, git repo")]
-        bare[("/backup/workspace.git")]
 
         claude <--> ws
         smb <--> ws
         ws -.-> bk
-        bk == "hourly snapshot" ==> bare
-        bare -.-> bk
     end
 
-    nas[("NAS")]
+    mnt[("BACKUP_MOUNT<br>workspace.git<br>claude-home")]
 
     remote <--> claude
     smb <-- "SMB" --> desktop
-    bk == "rsync over SSH" ==> nas
+    bk == "hourly push" ==> mnt
+    bk == "hourly copy" ==> mnt
 ```
 
 Solid arrows are writes, dotted are reads.
 
-Session transcripts live in Claude's home rather than the workspace, so the
-backup container mirrors those to the NAS separately.
+Session transcripts live in Claude's home rather than the workspace, so they
+are copied alongside the repo rather than into it.
 
 ## Design constraints
 
@@ -74,7 +73,11 @@ There is no registry and no separate image-publishing step.
 
 - A Linux Docker host with Compose v2.
 - A workspace directory that is already a git repository.
-- Somewhere to back up to, reachable over SSH. Any box that accepts rsync.
+- Storage for the backup, mounted by the OS before you start. Anything that
+  holds files. Mount it with `nofail` so a missing device cannot block boot,
+  and NFS with `soft` so an unreachable server cannot wedge processes that no
+  timeout can rescue. For cifs, add `uid=` and `gid=` matching the user who
+  runs `make init`, or the container will not be able to write.
 - An `amd64` host. The backup image pins supercronic to that architecture;
   building elsewhere means changing two build args in `backup/Dockerfile`.
 - `jq` on the host if you want `make plugins`.
@@ -87,7 +90,7 @@ Clone this onto the Docker host and run it there.
 git clone https://github.com/sebmartin/ai-workspace-remote.git
 cd ai-workspace-remote
 cp .env.example .env
-$EDITOR .env       # four values, see below
+$EDITOR .env       # two values, see below
 make init          # everything else, or it tells you what is wrong
 make up
 make login         # one-time: run /login inside the container
@@ -95,15 +98,15 @@ make login         # one-time: run /login inside the container
 
 `make init` is idempotent. Run it again any time to re-check a setup.
 
-### The four values
+### The two values
 
-`.env` answers two questions. Where does everything live, and how do I reach
-the backup.
+`.env` answers two questions. Where does everything live, and where does the
+backup go.
 
 | variable | what it is |
 |---|---|
 | `AIWR_ROOT` | one directory holding everything this stack owns |
-| `NAS_HOST` / `NAS_USER` / `NAS_ROOT` | where the backup is mirrored to, over SSH |
+| `BACKUP_MOUNT` | a directory on storage the OS has already mounted |
 
 Everything else in `.env` has a working default and can be left alone.
 `WORKSPACE_UID` and `WORKSPACE_GID` are written by `make init` from whoever
@@ -115,33 +118,39 @@ runs it, so they always match the files on disk.
 $AIWR_ROOT/
   workspace/   the git repo, shared over SMB, where the agent works
   home/        Claude's home, so .claude/ and .claude.json
-  backup/      local bare repo and job state, staging for the NAS mirror
 ```
 
 `home/` is a sibling of `workspace/` and not a child, deliberately. Inside the
-workspace it would be committed, shared over SMB and mirrored to the NAS.
+workspace it would be committed, shared over SMB and copied to the backup.
 
-`backup/` is not your backup. It is a bare repo on the same disk as the
-workspace, which is the point: git does its ref locking and object work on
-local disk, so the NAS only ever receives plain files and never needs git. If
-the disk dies they both die, and the copy under `NAS_ROOT` is what you restore
-from.
+The backup is not under that root. It lives on `BACKUP_MOUNT`, which holds a
+bare `workspace.git` and a `claude-home` directory.
 
 One root also means one value to change to stand up a second, fully isolated
 stack, which is how to try this out without pointing anything at a workspace
 you care about. The three services set `container_name`, so a test stack and a
 real one cannot run at the same time.
 
-### What init does, and the two things it cannot
+### What init does
 
-It creates the tree, sets ownership and mode, makes `workspace/` a git repo if
-it is empty, writes a starter `.gitignore` and `.claude.json`, generates the
-SMB password and the NAS SSH key, scans the NAS host key, and confirms the
-backup target is reachable. It stops with a named problem rather than doing
-half of it.
+It creates `.env` if it is missing and asks for anything it needs, creates the
+tree, sets ownership and mode, makes `workspace/` a git repo if it is empty,
+writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
+creates the backup repo, and marks the storage. It stops with a named problem
+rather than doing half of it.
 
-Two steps need a human. `ssh-copy-id` needs your NAS password, and `/login`
-needs a browser. `init` prints the first when it is still outstanding.
+`/login` is the only step it cannot do for you.
+
+### How it knows the storage is really there
+
+`init` leaves a `.aiwr-backup` file on `BACKUP_MOUNT`, and every job checks it
+before writing.
+
+That matters because an unmounted path is an empty directory, and Docker
+creates one if it is missing. Without the check, git and rsync would write to
+the Docker host's own disk and report success, and you would find out when you
+needed the backup. If the file is gone, the jobs refuse to run and say so in
+`WARNINGS.md`.
 
 ### Two things worth knowing
 
@@ -297,42 +306,41 @@ the home and mount the home as one directory.
 
 ## Backup and restore
 
-Four jobs, run by supercronic inside the backup container as the workspace
+Three jobs, run by supercronic inside the backup container as the workspace
 uid, so nothing it writes is root-owned.
 
 | job | default | what it does |
 |---|---|---|
-| `commit` | hourly | push every branch, plus a `backup` ref holding uncommitted work |
-| `mirror` | hourly | rsync the bare repo to the NAS over SSH |
-| `transcripts` | hourly | rsync session transcripts to the NAS |
-| `maintain` | weekly | `git gc` both repos, then a full `git fsck` |
+| `commit` | hourly | push every branch to `BACKUP_MOUNT`, plus a `backup` ref holding uncommitted work |
+| `transcripts` | hourly | copy session transcripts to `BACKUP_MOUNT` |
+| `maintain` | weekly | `git fsck` the backup, then `git gc` both repos |
 
 **Uncommitted work goes on a `backup` ref that is rewritten, not appended
 to.** It is always exactly `HEAD` plus one commit containing whatever is not
 committed yet, so the only blobs it keeps alive are the current uncommitted
 diff. Yesterday's half-finished edits become unreachable the moment the ref
-moves, and the weekly `gc` reclaims them. When the worktree is clean the ref
-just points at `HEAD`.
+moves, and a later `gc` reclaims them. When the worktree is clean the ref just
+points at `HEAD`.
 
-That reclamation is immediate in the bare repo. In the workspace repo the same
-`gc` uses git's default two-week prune expiry, because the lock only
-serialises this container's own jobs and you may be running git in there at
-the time, so superseded objects linger a little longer on that side.
+Both repos use git's default two-week prune expiry, never `--prune=now`. Git
+will not prune an object younger than that precisely so a concurrent writer
+that has created an object but not yet pointed a ref at it stays safe, and
+relying on that is why these jobs need no locking of their own.
 
 That bounds the cost. A naive append-only snapshot chain would keep every
 intermediate state the agent ever wrote, forever, and the only way back would
-be rewriting history. Here nothing accumulates, so the schedule is free to be
-as frequent as you like.
+be rewriting history. Here nothing accumulates beyond a fortnight, so the
+schedule is free to be as frequent as you like.
 
 An idle tick does nothing at all. Both commit dates are pinned to the
 parent's and the message carries no timestamp, so an unchanged tree hashes to
-the same commit every run. The ref does not move, the push is a no-op and the
-mirror has nothing to ship, with no bookkeeping needed to work that out.
+the same commit every run. The ref does not move and the push is a no-op, with
+no bookkeeping needed to work that out.
 
 The job uses git plumbing against a private index, so it never touches your
 checked-out branch, your index or `HEAD`, and cannot collide with a git
-command you run in the workspace. It pushes to the bare repo by path rather
-than through a configured remote, because a remote keeps a tracking ref whose
+command you run in the workspace. It pushes by path rather than through a
+configured remote, because a remote keeps a tracking ref whose
 reflog records every force-push, and those entries would hold every
 superseded commit alive in the workspace repo.
 
@@ -344,37 +352,54 @@ take the snapshot down with it. The job refuses to run if a local branch named
 
 `push --all` runs on every tick, because a commit you make by hand moves a
 ref without touching a single file and would otherwise never leave this disk.
-It is a no-op when there is nothing new. The job also keeps the bare repo's
+It is a no-op when there is nothing new. The job also keeps the backup repo's
 `HEAD` pointing at the same branch as the workspace, since `git init --bare`
 leaves it at `refs/heads/master` and a clone of the restored copy would
 otherwise check out nothing.
 
-**The backup target only has to accept rsync.** All the git work happens on
-local disk and the NAS receives plain files it never interprets, so it needs
-nothing installed and git's locking never touches a network filesystem.
+**The backup target needs nothing installed on it.** It only ever receives
+files. Ordering is git's problem now rather than a copying tool's: `push`
+writes objects before the refs that name them, as a protocol guarantee, so
+there is no window where the copy references something that is not there yet.
 
-**The mirror runs in two passes**, objects before refs. A single
-`rsync --delete` over a live git directory can copy `refs/` before the objects
-they point at, or delete a pack the new refs still need, leaving the copy
-unclonable, and permanently so if the source disk dies inside that window.
+**Git runs against whatever you mounted.** This is the deliberate trade for
+not needing SSH. Ref updates on the backup take git's own `.lock` files on
+that filesystem, which cifs and nfs handle for a single serialized writer, and
+that is what this is. The visible failure mode is a stale
+`refs/heads/backup.lock` after an interrupted push, which blocks later pushes
+until you delete it. It shows up in `WARNINGS.md`.
 
-**The weekly fsck is not optional.** rsync replicates corruption as faithfully
-as it does data, and nothing on the NAS side would ever notice. A failed fsck
-writes a `corrupt` marker that blocks mirroring until a human clears it,
-preserving the last known-good copy.
+**The weekly fsck is not optional**, and it now checks the real backup rather
+than a local copy of it. It runs before the repack, not after, because on an
+already-corrupt repo a broken ref can make live objects look unreachable and a
+repack would then delete them. A failed fsck skips the repack and writes a
+warning. Snapshots keep being written, because refusing them would only
+guarantee that the newest work exists nowhere.
 
-**Failures are loud.** No job reports success it has not verified. Each one
-exits non-zero on failure, supercronic prints that with the job name and exit
-code, and the container's healthcheck reports unhealthy when a job has not
-succeeded within its staleness window. A 3am failure shows up as an unhealthy
-container rather than in a log nobody reads.
+**Failures are loud, in the place you are already looking.** A failing job
+writes `WARNINGS.md` into the root of the workspace, saying what broke and how
+to fix it, and deletes it once the job succeeds again. The container also
+reports unhealthy while that file exists, but a file in the workspace is seen
+by whoever is working there, and an unhealthy container is seen by nobody.
+
+### WARNINGS.md
+
+When a backup job fails it writes `WARNINGS.md` into the root of the
+workspace, with a section per failing job saying what broke and the command
+that fixes it. The job removes its own section when it next succeeds, and the
+file is deleted once the last section goes. Its absence means everything is
+working.
+
+It is gitignored, so it never enters a snapshot. That is not tidiness: the
+file carries a timestamp, and in the tree it would change the commit every
+hour and defeat the no-op idle tick.
 
 ### Transcripts are handled separately, and carefully
 
 Session transcripts live in Claude's home, not the workspace, so the git
-backup does not cover them. They go to the NAS by rsync rather than into git:
-they are append-only JSONL that grow steadily, and committing them every
-cycle would store a fresh full blob of a growing file each time.
+backup does not cover them. They are copied alongside the repo rather than
+into it: they are append-only JSONL that grow steadily, and committing them
+every cycle would store a fresh full blob of a growing file each time.
 
 **The rsync filter is an allowlist ending in `--exclude='*'`.** An exclude
 list would be correct only for the files that exist today and would silently
@@ -395,8 +420,14 @@ archive grows, so keep an eye on it.
 
 ### Restoring
 
-What lands on the NAS is a bare git repository. Rsync it back and clone it.
-Try that once before you trust any of this.
+What lands on the storage is a bare git repository, so:
+
+```bash
+git clone $BACKUP_MOUNT/workspace.git restored
+```
+
+Transcripts sit next to it under `claude-home/`, ready to copy into a fresh
+`$AIWR_ROOT/home/.claude`. Try the clone once before you trust any of this.
 
 ## Operations
 
@@ -406,7 +437,7 @@ make logs        # follow
 make restart     # restart claude-remote, which is the whole update ritual
 make plugins     # which plugin version and ref is live
 make init        # set up, or re-check, everything .env describes
-make backup-now  # force a snapshot and a mirror
+make backup-now  # force a snapshot and a transcript copy
 make rebuild     # refresh base images and apt packages
 make check       # validate the compose file and the shell scripts
 ```
@@ -433,8 +464,8 @@ Do it between `make init` and `make up`.
 1. Stop anything that writes to it, and unmount it everywhere it is mounted,
    so nothing writes into the source mid-copy.
 2. `rsync -a` the old workspace over `$AIWR_ROOT/workspace`, including its
-   `.git`. Copy from the NAS to the Docker host directly rather than through a
-   laptop that has the share mounted.
+   `.git`. Copy to the Docker host directly rather than through a laptop that
+   has the old location mounted.
 3. Run `git status && git log --oneline -5 && git fsck`. All clean before you
    go on. Then `git gc`. A repo that has lived on a network filesystem for
    months will usually repack down a long way.
@@ -454,27 +485,28 @@ data for a tree the container writes behind Samba's back, but that prevents
 stale reads, not lost updates. There is no fix at this layer. The hourly
 snapshot is the safety net.
 
-**`$AIWR_ROOT/backup` is not your backup.** It is a bare repo on the same
-disk as the workspace, and that is the point: git does its ref locking and
-object work on local disk, so the NAS only ever receives plain files and never
-needs git installed. If the disk dies they both die, and the copy under
-`NAS_ROOT` is what you restore from.
+**If the storage is not mounted, nothing is backed up anywhere.** There is no
+intermediate copy on the Docker host to fall back on. The `.aiwr-backup`
+marker is what makes that loud rather than silent: the jobs refuse to run and
+`WARNINGS.md` says so. But if you unmount the storage and ignore the warning,
+snapshots simply stop.
 
 **The agent can delete the workspace's git history.** `.git` lives inside the
 tree and the backup container runs as the same uid Claude does, so nothing
-prevents it. The bare repo on the same disk and the NAS copy, up to an hour
-stale, are the recovery. Moving the git directory somewhere the session cannot
-reach is real work and is deferred.
+prevents it. The copy on `BACKUP_MOUNT`, up to an hour stale, is the recovery.
+Moving the git directory somewhere the session cannot reach is real work and
+is deferred.
 
 **One disk holds the live copy.** The Docker host's disk is a single point of
 failure. The backup is an hourly RPO plus git's integrity checking, not
 replication. That is a reasonable trade for text you can regenerate a few
 minutes of, and a bad one if you were expecting redundancy. If the workspace
 previously lived on a NAS with RAID, be aware you have traded that for this.
+Whether the backup is on a different machine is now your choice, since any
+mount will do. A second internal disk does not survive what takes the box out.
 
-**`secrets/` and `.env` are the security perimeter.** `secrets/` holds the
-SMB password and the NAS SSH key, `.env` holds paths and hostnames. Both are
-gitignored.
+**`secrets/` and `.env` are the security perimeter.** `secrets/` holds the SMB
+password, `.env` holds paths. Both are gitignored.
 
 ## Troubleshooting
 
@@ -485,7 +517,9 @@ gitignored.
 | `make plugins` shows `enabled: false` | the same plugin name is installed from two marketplaces |
 | Stop takes the full grace period | SIGTERM is not reaching claude, check `init: true` |
 | Share not visible in Finder | expected, connect with ⌘K, there is no discovery |
-| Backup container unhealthy | a job has not succeeded in its window, or the bare repo is marked corrupt. Check `make logs` |
+| Backup container unhealthy | read `WARNINGS.md` in the workspace, which says which job failed and why |
+| `dest_missing` in the logs | `BACKUP_MOUNT` has no `.aiwr-backup` marker, so the storage is not mounted. Mount it, then `make init` |
+| `cannot lock ref 'refs/heads/backup'` | a stale `.lock` in `$BACKUP_MOUNT/workspace.git` after an interrupted push. Delete it |
 | `guard_tripped` in the logs | the transcript filter would have sent credential material, so nothing was transferred |
 
 ## License

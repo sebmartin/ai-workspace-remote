@@ -1,6 +1,6 @@
 #!/bin/bash
-# Push the workspace to the local bare repo: every real branch as-is, plus a
-# `backup` ref holding whatever is not committed yet.
+# Push the workspace to the backup repo on the mounted storage: every real
+# branch as-is, plus a `backup` ref holding whatever is not committed yet.
 #
 # That ref is rewritten on every run rather than appended to. It is always
 # exactly HEAD plus one commit, so the only blobs it keeps alive are the
@@ -16,20 +16,28 @@ JOB=commit
 . /opt/aiwr/lib.sh
 
 BRANCH=backup
-export GIT_INDEX_FILE="${STATE_DIR}/snapshot.index"
+
+# A private index, so this never touches the one you use. /tmp is a tmpfs and
+# a fresh index costs only a slower first `add -A`.
+export GIT_INDEX_FILE=/tmp/snapshot.index
 
 run() {
   local head tree target
 
-  # Keep the bare repo's HEAD pointing at the same branch as the workspace,
+  # Before anything writes an object. `add -A` against a missing destination
+  # would leave loose objects in the workspace repo that nothing ever
+  # references, every hour, until a gc clears them.
+  require_dest
+
+  # Keep the backup repo's HEAD pointing at the same branch as the workspace,
   # since `git init --bare` leaves it at refs/heads/master and a clone of the
   # restored copy would check out nothing. Skipped on a detached HEAD, where
   # there is no branch to name and symbolic-ref exits non-zero.
   local ws_head
   if ws_head="$(git_ws symbolic-ref -q HEAD)"; then
-    git_bare symbolic-ref HEAD "${ws_head}"
+    git_dest symbolic-ref HEAD "${ws_head}"
   else
-    warn detached_head "not syncing the bare repo's HEAD"
+    warn detached_head "not syncing the backup repo's HEAD"
   fi
 
   if git_ws show-ref -q --verify "refs/heads/${BRANCH}"; then
@@ -63,22 +71,18 @@ run() {
   # after any amend or rebase of an already-pushed branch, and that failure
   # would otherwise take the snapshot down with it.
   #
-  # Pushed to the bare repo by path, not via a configured remote. A named
-  # remote would keep a remote-tracking ref whose reflog records every
-  # force-push, and those entries hold every superseded commit reachable, so
-  # the workspace repo would grow without bound while the bare repo stayed
-  # lean. Measured at 10x on a 200KB file over 10 rounds.
-  git_ws push -q --force "${BACKUP_GIT_DIR}" "${target}:refs/heads/${BRANCH}"
+  # Pushed by path, not via a configured remote. A named remote would keep a
+  # remote-tracking ref whose reflog records every force-push, and those
+  # entries hold every superseded commit reachable, so the workspace repo
+  # would grow without bound while the backup stayed lean. Measured at 10x on
+  # a 200KB file over 10 rounds.
+  git_ws push -q --force "${DEST_GIT_DIR}" "${target}:refs/heads/${BRANCH}"
   info backup_ref "sha=$(git_ws rev-parse --short "${target}")"
 
-  git_ws push -q "${BACKUP_GIT_DIR}" --all
+  git_ws push -q "${DEST_GIT_DIR}" --all
 
   # Reached only if both pushes returned zero.
-  record_success
+  warn_clear
 }
 
-# Take the lock first, then call the job bare so errexit still applies to it.
-# The next tick retries, and a lock held long enough to matter shows up as
-# staleness in the healthcheck.
-take_lock "${GIT_LOCK}" || { warn skipped "reason=lock_held"; exit 0; }
 run

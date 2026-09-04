@@ -4,7 +4,9 @@
 #
 #   ${AIWR_ROOT}/workspace  the git repo, mounted at /workspace everywhere
 #   ${AIWR_ROOT}/home       Claude's home, .claude/ and .claude.json
-#   ${AIWR_ROOT}/backup     bare repo and job state, staging for the mirror
+#
+# The backup itself is not under that root. BACKUP_MOUNT names a directory on
+# storage the OS has mounted, and it arrives at /backup in the backup container.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -80,21 +82,14 @@ services:
     stop_grace_period: 60s
     volumes:
       - ${AIWR_ROOT:?}/workspace:/workspace
-      - ${AIWR_ROOT:?}/backup:/backup
+      - ${BACKUP_MOUNT:?}:/backup
       # Only .claude, not the whole home, so .claude.json is not merely
       # excluded from the transcript filter but absent from this container.
       - ${AIWR_ROOT:?}/home/.claude:/claude-home:ro
-      - ./secrets/id_backup:/run/aiwr/id:ro
-      - ./secrets/known_hosts:/run/aiwr/known_hosts:ro
     tmpfs:
       - /tmp:mode=1777
     environment:
       <<: *env
-      NAS_HOST: ${NAS_HOST:?}
-      NAS_PORT: ${NAS_PORT:-22}
-      NAS_USER: ${NAS_USER:?}
-      NAS_PATH: ${NAS_ROOT:?}/workspace.git
-      NAS_TRANSCRIPTS_PATH: ${NAS_ROOT:?}/claude-home
       BACKUP_COMMIT_CRON: ${BACKUP_COMMIT_CRON:-7 * * * *}
     # A silent 3am failure otherwise goes unnoticed.
     healthcheck:
