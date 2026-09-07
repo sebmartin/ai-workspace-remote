@@ -33,35 +33,14 @@ ps: ## Show container status and health
 shell: ## Shell into claude-remote
 	docker compose exec claude-remote bash
 
-# `run`, not `exec`: nothing is up yet, and the service cannot start until
-# this is done.
-#
-# One interactive session with --remote-control covers everything the service
-# cannot answer for itself: signing in, the workspace trust dialog, and the
-# confirmation to turn remote control on. All of it persists into the mounted
-# config directory, so it is asked once, here, and never again.
-login: ## Sign in, trust the workspace and enable remote control, once
+# `run`, not `exec`: nothing is up yet, and the service cannot start without
+# credentials. Signing in is all this does now. The three questions Claude
+# asks on a first run are answered by init, in the config file it writes,
+# because the service has no way to answer them itself.
+login: ## Sign in, once
+	docker compose run --rm claude-remote claude auth login
 	@echo
-	@echo "  ────────────────────────────────────────────────────────────────"
-	@echo "  Claude is about to start, once, by hand."
-	@echo
-	@echo "  Work through whatever it asks: signing in, trusting /workspace,"
-	@echo "  and enabling remote control. The service runs with nobody able"
-	@echo "  to answer questions, so they have to be answered now."
-	@echo
-	@echo "  When the session shows up at claude.ai/code, this all works."
-	@echo "  Then exit Claude."
-	@echo "  ────────────────────────────────────────────────────────────────"
-	@echo
-	@printf "  Press ENTER to continue "
-	@read _ || true
-	-docker compose run --rm claude-remote claude --remote-control
-	@echo
-	@echo "  ────────────────────────────────────────────────────────────────"
-	@echo "  Setup is done. Start the stack with:"
-	@echo
-	@echo "      make up"
-	@echo "  ────────────────────────────────────────────────────────────────"
+	@echo "  Signed in. Start the stack with:  make up"
 
 plugins: ## Show which plugin and ref is actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'

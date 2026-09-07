@@ -94,11 +94,13 @@ make login         # one-time, and before the stack starts
 make up
 ```
 
-`make login` starts Claude once, interactively, with remote control on. Work
-through whatever it asks: signing in, trusting `/workspace`, enabling remote
-control. When the session appears at claude.ai/code it works, and you can
-exit. It has to happen before `make up`, because the service runs with nobody
-able to answer a question. All of it persists, so it is asked once.
+`make login` signs you in. It has to happen before `make up`, because the
+service cannot start without credentials.
+
+Claude asks three other things on a first run: onboarding, whether
+`/workspace` is trusted, and whether to enable remote control. The service
+runs with nobody able to answer those, so `make init` records the answers in
+the config file it writes.
 
 `make init` creates `.env` for you and asks for anything it cannot work out. It
 is idempotent, so run it again any time to re-check a setup.

@@ -128,10 +128,27 @@ ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
 
 # Docker creates a directory here if the file is absent, and Claude then fails
 # in a way that does not mention it.
+# Seeded, not empty. Claude asks three things on a first run that the service
+# has no way to answer: onboarding, whether /workspace is trusted, and whether
+# to turn remote control on. Recording the answers up front is the difference
+# between `make up` working and it sitting on an unanswerable prompt.
+#
+# Only written when the file does not exist. After that it belongs to Claude.
 if [ ! -s "${AIWR_ROOT}/home/.claude.json" ]; then
-  printf '{}' > "${AIWR_ROOT}/home/.claude.json"
+  cat > "${AIWR_ROOT}/home/.claude.json" <<'JSON'
+{
+  "hasCompletedOnboarding": true,
+  "hasUsedRemoteControl": true,
+  "remoteDialogSeen": true,
+  "projects": {
+    "/workspace": {
+      "hasTrustDialogAccepted": true
+    }
+  }
+}
+JSON
   chmod 600 "${AIWR_ROOT}/home/.claude.json"
-  did "created home/.claude.json"
+  did "created home/.claude.json, with the first-run questions pre-answered"
 fi
 
 if [ ! -d "${AIWR_ROOT}/workspace/.git" ]; then
