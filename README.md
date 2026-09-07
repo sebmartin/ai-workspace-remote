@@ -90,9 +90,14 @@ Clone this onto the Docker host and run it there.
 git clone https://github.com/sebmartin/ai-workspace-remote.git
 cd ai-workspace-remote
 make init          # asks for what it needs, then does the rest
+make login         # one-time, and before the stack starts
 make up
-make login         # one-time: run /login inside the container
 ```
+
+`make login` signs you in, then starts the server once so you can confirm
+remote control. Ctrl+C when it says it is serving. It has to happen before
+`make up`: the service runs with nobody able to answer a prompt, and both
+answers persist, so this is the only time either is asked.
 
 `make init` creates `.env` for you and asks for anything it cannot work out. It
 is idempotent, so run it again any time to re-check a setup.
@@ -138,7 +143,7 @@ writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
 
-`/login` is the only step it cannot do for you.
+`/login` is the only step it cannot do for you, and it is the next one.
 
 ### How it knows the storage is really there
 
@@ -276,32 +281,19 @@ Check what is on disk with:
 docker compose exec claude-remote ls ~/.claude/projects/-workspace/
 ```
 
-### How the home is mounted, and the hazard in it
+### Where Claude's state lives
 
-Two paths are bind-mounted individually, `~/.claude` and `~/.claude.json`,
-rather than the home directory as a whole. Mounting the whole home would be
-better in one respect and impossible in another: it would hide
-`/home/claude/.local`, where the image installs Claude and `uv`, and the
-container would come up with no `claude` on `PATH`. Claude's native installer
-only ever installs into `$HOME` and takes no install-dir override, so there is
-no quick way around that.
+`CLAUDE_CONFIG_DIR=/config`, backed by one directory bind mount. That puts
+`settings.json`, `plugins/` and `.claude.json` together in `$AIWR_ROOT/home`,
+so everything Claude records persists.
 
-The cost is real and worth knowing. `~/.claude.json` is rewritten atomically,
-as write-temp-then-`rename`. A single-file bind mount pins an *inode*, and
-`rename` installs a new one, so after the first rewrite the container can be
-reading the old orphaned inode while the host has the new file. This is the
-same shape the previous setup ran with, so it is a known-lived-with hazard
-rather than a new one, but it is a hazard.
-
-Two consequences follow from `~/.local` not being persisted:
-
-- A `docker compose up -d` recreate reverts Claude to the version baked into
-  the image, discarding any background auto-update. Since the README tells you
-  to recreate whenever `CLAUDE_HOSTNAME` changes, expect that.
-- `make rebuild` is how you actually move the baked-in version forward.
-
-The fix, when it is worth the effort, is to install Claude and `uv` outside
-the home and mount the home as one directory.
+The home itself is deliberately not mounted. Mounting it would hide
+`/home/claude/.local`, where Claude and `uv` are installed. Mounting the two
+config paths individually does not work either, because `.claude.json` is
+rewritten by rename and a single-file bind mount cannot be replaced, so
+anything written there is lost. A recreate still reverts Claude to the version
+in the image, since `~/.local` is not persisted. `make rebuild` moves that
+version forward.
 
 ## Backup and restore
 
@@ -426,7 +418,7 @@ git clone $BACKUP_MOUNT/workspace.git restored
 ```
 
 Transcripts sit next to it under `claude-home/`, ready to copy into a fresh
-`$AIWR_ROOT/home/.claude`. Try the clone once before you trust any of this.
+`$AIWR_ROOT/home`. Try the clone once before you trust any of this.
 
 ## Operations
 
@@ -472,7 +464,7 @@ Do it between `make init` and `make up`.
    so auth, sessions and plugin state carry over.
 5. `make init` again. It fixes ownership and modes over what you copied in, and
    leaves the repo and the `.gitignore` alone now that they exist.
-6. `make up`.
+6. `make login`, then `make up`.
 7. Only then rename the old copy rather than deleting it, and leave it a week.
 
 ## Known limitations
@@ -512,11 +504,13 @@ password, `.env` holds paths. Both are gitignored.
 | symptom | cause |
 |---|---|
 | Device shows as a hex ID in claude.ai | `CLAUDE_HOSTNAME` unset, or the container was restarted rather than recreated |
+| Container up, nothing in claude.ai | blocked on a prompt. `docker attach ai-workspace-claude` to see it, answer, detach with Ctrl+P Ctrl+Q, not Ctrl+C |
 | Sessions do not come back after a restart | more than ~4h elapsed |
 | `make plugins` shows `enabled: false` | the same plugin name is installed from two marketplaces |
 | Stop takes the full grace period | SIGTERM is not reaching claude, check `init: true` |
 | Share not visible in Finder | expected, connect with ⌘K, there is no discovery |
 | Backup container unhealthy | read `WARNINGS.md` in the workspace, which says which job failed and why |
+| claude-remote restarting in a loop on first run | no credentials yet. Run `make login`, which does not need the stack up |
 | `dest_missing` in the logs | `BACKUP_MOUNT` has no `.aiwr-backup` marker, so the storage is not mounted. Mount it, then `make init` |
 | `cannot lock ref 'refs/heads/backup'` | a stale `.lock` in `$BACKUP_MOUNT/workspace.git` after an interrupted push. Delete it |
 | `guard_tripped` in the logs | the transcript filter would have sent credential material, so nothing was transferred |

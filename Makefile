@@ -33,10 +33,40 @@ ps: ## Show container status and health
 shell: ## Shell into claude-remote
 	docker compose exec claude-remote bash
 
-# `run`, not `exec`: before the first login the service exits and restarts,
-# so there is no running container to exec into.
-login: ## Run Claude to do the one-time /login
-	docker compose run --rm claude-remote claude
+# `run`, not `exec`: nothing is up yet, and the service cannot start until
+# this is done.
+#
+# Then the server itself, once, because it asks to confirm remote control on
+# first use and the service runs with nobody able to answer. Both the login
+# and the confirmation persist into the mounted config dir, so this is the
+# only time either is asked.
+#
+# The pause is deliberate. The login flow scrolls, and without it this
+# explanation is gone before anyone reads it.
+login: ## Sign in and confirm remote control, once
+	docker compose run --rm claude-remote claude auth login
+	@echo
+	@echo "  ────────────────────────────────────────────────────────────────"
+	@echo "  Next: starting the server once, by hand."
+	@echo
+	@echo "  It asks to confirm remote control the first time it runs. The"
+	@echo "  service cannot answer that, so it has to be answered here."
+	@echo
+	@echo "  Answer it, then wait for the line saying the session is running."
+	@echo "  That is also your check that this works at all. Then press Ctrl+C."
+	@echo
+	@echo "  You should not see either question again."
+	@echo "  ────────────────────────────────────────────────────────────────"
+	@echo
+	@printf "  Press ENTER to continue "
+	@read _ || true
+	-docker compose run --rm claude-remote
+	@echo
+	@echo "  ────────────────────────────────────────────────────────────────"
+	@echo "  Setup is done. Start the stack with:"
+	@echo
+	@echo "      make up"
+	@echo "  ────────────────────────────────────────────────────────────────"
 
 plugins: ## Show which plugin and ref is actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'

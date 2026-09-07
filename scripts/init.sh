@@ -99,7 +99,7 @@ if [ -t 0 ] && [ -d "${AIWR_ROOT}" ] && [ -n "$(ls -A "${AIWR_ROOT}" 2>/dev/null
   fi
 fi
 
-sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home/.claude"
+sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
@@ -179,5 +179,5 @@ ok "backup storage ready and marked"
 
 echo
 echo "Ready. Review .env if you want to change anything, then:"
-echo "  make up"
 echo "  make login"
+echo "  make up"

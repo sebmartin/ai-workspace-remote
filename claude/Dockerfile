@@ -35,4 +35,4 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["claude", "remote-control", "--permission-mode", "auto"]
+CMD ["claude", "remote-control", "--spawn=same-dir", "--permission-mode", "auto"]

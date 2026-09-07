@@ -3,7 +3,7 @@
 # whole stack at a different tree:
 #
 #   ${AIWR_ROOT}/workspace  the git repo, mounted at /workspace everywhere
-#   ${AIWR_ROOT}/home       Claude's home, .claude/ and .claude.json
+#   ${AIWR_ROOT}/home       Claude's config dir, mounted at /config
 #
 # The backup itself is not under that root. BACKUP_MOUNT names a directory on
 # storage the OS has mounted, and it arrives at /backup in the backup container.
@@ -36,15 +36,26 @@ services:
 
     volumes:
       - ${AIWR_ROOT:?}/workspace:/workspace
-      - ${AIWR_ROOT:?}/home/.claude:/home/claude/.claude
-      - ${AIWR_ROOT:?}/home/.claude.json:/home/claude/.claude.json
+      # One directory, via CLAUDE_CONFIG_DIR below. Not $HOME: mounting over
+      # the home would hide /home/claude/.local, where Claude and uv are
+      # installed. Not two separate mounts either, because .claude.json is
+      # rewritten by rename and a single-file bind mount cannot be replaced,
+      # so anything Claude recorded there was silently lost on restart.
+      - ${AIWR_ROOT:?}/home:/config
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
-    command: ["claude", "remote-control", "--permission-mode", "${CLAUDE_PERMISSION_MODE:-auto}"]
+    #
+    # --spawn is not optional. Without it remote-control asks which spawn mode
+    # to use and blocks on stdin, and the service has a terminal with nobody
+    # attached, so it waits there forever with no error and no connection.
+    command: ["claude", "remote-control", "--spawn=same-dir", "--permission-mode", "${CLAUDE_PERMISSION_MODE:-auto}"]
 
     environment:
       <<: *env
+      # Moves settings.json, plugins/ and .claude.json into one directory we
+      # can mount as a directory. Everything Claude persists then survives.
+      CLAUDE_CONFIG_DIR: /config
       PLUGIN_NAME: ${PLUGIN_NAME:-}
       PLUGIN_REPO: ${PLUGIN_REPO:-}
       PLUGIN_REF: ${PLUGIN_REF:-}
@@ -85,7 +96,7 @@ services:
       - ${BACKUP_MOUNT:?}:/backup
       # Only .claude, not the whole home, so .claude.json is not merely
       # excluded from the transcript filter but absent from this container.
-      - ${AIWR_ROOT:?}/home/.claude:/claude-home:ro
+      - ${AIWR_ROOT:?}/home:/claude-home:ro
     tmpfs:
       - /tmp:mode=1777
     environment:
