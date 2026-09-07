@@ -2,7 +2,7 @@
 # needs to, which keeps make's include-and-quote rules out of the picture.
 
 .PHONY: help init up down restart rebuild logs ps shell login \
-        plugins backup-now check
+        plugins backup-now check smb
 
 help: ## Show this help
 	@grep -hE '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -41,6 +41,17 @@ login: ## Sign in, once
 	docker compose run --rm claude-remote claude auth login
 	@echo
 	@echo "  Signed in. Start the stack with:  make up"
+
+# There is no discovery: NetBIOS is off and nothing advertises over mDNS, so
+# the address has to come from somewhere. Here.
+smb: ## Print the SMB address, user and password
+	@addr="$$(hostname -I 2>/dev/null | awk '{print $$1}')"; \
+	[ -n "$$addr" ] || addr="$$(hostname)"; \
+	if [ -s secrets/smb_password ]; then pw="$$(cat secrets/smb_password)"; \
+	else pw="(not set, run make init)"; fi; \
+	printf '\n  smb://claude@%s/workspace\n\n' "$$addr"; \
+	printf '  user      claude\n'; \
+	printf '  password  %s\n\n' "$$pw"
 
 plugins: ## Show which plugin and ref is actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'
