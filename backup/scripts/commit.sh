@@ -52,8 +52,14 @@ run() {
     return 1
   fi
 
-  head="$(git_ws rev-parse -q --verify HEAD)" \
-    || { log error no_head "the workspace has no commits yet"; return 1; }
+  # A repository with no commits is a legitimate state, not a failure. There
+  # is nothing to snapshot onto, so say so and stop rather than reporting a
+  # problem that would sit in WARNINGS.md until someone made a commit.
+  if ! head="$(git_ws rev-parse -q --verify HEAD)"; then
+    info no_commits_yet "nothing to snapshot"
+    record_success
+    return 0
+  fi
 
   git_ws add -A
   tree="$(git_ws write-tree)"

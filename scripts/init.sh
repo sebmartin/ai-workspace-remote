@@ -168,6 +168,17 @@ for line in '.DS_Store' '._*' '.Spotlight-V100' '.Trashes' '/WARNINGS.md'; do
   grep -qxF "${line}" "${GI}" 2>/dev/null || { printf '%s\n' "${line}" >> "${GI}"; did "added ${line} to workspace/.gitignore"; }
 done
 
+# A repository with no commits has no HEAD, and the backup snapshots onto
+# HEAD, so it would fail every hour on a new workspace and report a problem
+# that is not one. Give it something to start from.
+if ! git -C "${AIWR_ROOT}/workspace" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+  git -C "${AIWR_ROOT}/workspace" add .gitignore
+  git -C "${AIWR_ROOT}/workspace" \
+    -c user.name="ai-workspace-remote" -c user.email="init@localhost" \
+    commit -q -m "Initial commit"
+  did "made the first commit in workspace/"
+fi
+
 echo
 echo "Setting up secrets/"
 mkdir -p secrets && chmod 700 secrets
