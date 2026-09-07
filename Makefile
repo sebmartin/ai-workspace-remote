@@ -36,31 +36,26 @@ shell: ## Shell into claude-remote
 # `run`, not `exec`: nothing is up yet, and the service cannot start until
 # this is done.
 #
-# Then the server itself, once, because it asks to confirm remote control on
-# first use and the service runs with nobody able to answer. Both the login
-# and the confirmation persist into the mounted config dir, so this is the
-# only time either is asked.
-#
-# The pause is deliberate. The login flow scrolls, and without it this
-# explanation is gone before anyone reads it.
-login: ## Sign in and confirm remote control, once
-	docker compose run --rm claude-remote claude auth login
+# One interactive session with --remote-control covers everything the service
+# cannot answer for itself: signing in, the workspace trust dialog, and the
+# confirmation to turn remote control on. All of it persists into the mounted
+# config directory, so it is asked once, here, and never again.
+login: ## Sign in, trust the workspace and enable remote control, once
 	@echo
 	@echo "  ────────────────────────────────────────────────────────────────"
-	@echo "  Next: starting the server once, by hand."
+	@echo "  Claude is about to start, once, by hand."
 	@echo
-	@echo "  It asks to confirm remote control the first time it runs. The"
-	@echo "  service cannot answer that, so it has to be answered here."
+	@echo "  Work through whatever it asks: signing in, trusting /workspace,"
+	@echo "  and enabling remote control. The service runs with nobody able"
+	@echo "  to answer questions, so they have to be answered now."
 	@echo
-	@echo "  Answer it, then wait for the line saying the session is running."
-	@echo "  That is also your check that this works at all. Then press Ctrl+C."
-	@echo
-	@echo "  You should not see either question again."
+	@echo "  When the session shows up at claude.ai/code, this all works."
+	@echo "  Then exit Claude."
 	@echo "  ────────────────────────────────────────────────────────────────"
 	@echo
 	@printf "  Press ENTER to continue "
 	@read _ || true
-	-docker compose run --rm claude-remote
+	-docker compose run --rm claude-remote claude --remote-control
 	@echo
 	@echo "  ────────────────────────────────────────────────────────────────"
 	@echo "  Setup is done. Start the stack with:"

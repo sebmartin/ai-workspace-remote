@@ -18,6 +18,15 @@ die() { printf '\n\033[31m%s\033[0m\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "
 # Read a key without sourcing, so a stray line in .env cannot execute.
 get() { sed -n "s/^$1=//p" "${ENV_FILE}" | tail -1 | sed 's/[[:space:]]*$//'; }
 
+# A trailing slash renders as /a//b everywhere the value is used, and rsync
+# treats one as significant, so normalise it away at the single point where
+# values enter.
+trim_slashes() {
+  local v="$1"
+  while [ "${v}" != "${v%/}" ]; do v="${v%/}"; done
+  printf '%s' "${v}"
+}
+
 set_key() {
   if grep -q "^$1=" "${ENV_FILE}"; then
     sed -i.bak "s|^$1=.*|$1=$2|" "${ENV_FILE}" && rm -f "${ENV_FILE}.bak"
@@ -54,9 +63,10 @@ ask() {
       read -r -p "${key}: " value || die "Cancelled."
     fi
     case "${value}" in
-      /?*) ;;
+      /?*) value="$(trim_slashes "${value}")" ;;
       *) printf '  must be an absolute path\n'; value="" ;;
     esac
+    [ -z "${value}" ] && printf '  must be an absolute path\n'
   done
   set_key "${key}" "${value}"
   did "${key}=${value}"
@@ -69,6 +79,15 @@ ask AIWR_ROOT \
   /srv/ai-workspace
 ask BACKUP_MOUNT \
   "BACKUP_MOUNT is where the backup goes: a directory on storage you have already mounted. A NAS share, a second disk, a USB enclosure. Mount it first, because an unmounted path is an empty directory and the backup would fill this machine's disk instead."
+
+# Also normalise values that were already in .env, whether hand-edited or
+# written before this ran.
+for key in AIWR_ROOT BACKUP_MOUNT; do
+  raw="$(get "${key}")"
+  trimmed="$(trim_slashes "${raw}")"
+  [ -z "${trimmed}" ] && die "${key} is set to ${raw}, which is not a usable path."
+  [ "${trimmed}" != "${raw}" ] && { set_key "${key}" "${trimmed}"; did "${key}=${trimmed}, trailing slash removed"; }
+done
 
 AIWR_ROOT="$(get AIWR_ROOT)"
 BACKUP_MOUNT="$(get BACKUP_MOUNT)"
