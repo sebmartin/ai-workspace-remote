@@ -16,16 +16,27 @@ if [ "$(id -u)" = "0" ]; then
   if [ "$(id -u claude)" != "${want_uid}" ] || [ "$(id -g claude)" != "${want_gid}" ]; then
     groupmod -o -g "${want_gid}" claude
     usermod  -o -u "${want_uid}" -g "${want_gid}" claude
-    # Only what the image owns. Everything under ~/.claude is a bind mount that
-    # the host already owns, and recursing into it would be slow and pointless.
+    # Only what the image owns. The config directory is a bind mount the host
+    # already owns, and recursing into it would be slow and pointless.
     chown "${want_uid}:${want_gid}" /home/claude
     chown -R "${want_uid}:${want_gid}" /home/claude/.local /home/claude/.gitconfig 2>/dev/null
   fi
   exec setpriv --reuid="${want_uid}" --regid="${want_gid}" --init-groups -- "$0" "$@"
 fi
 
+# Claude updates itself in the background, but it installs into ~/.local,
+# which is not mounted, so the download is thrown away whenever the container
+# is recreated and the version falls back to whatever the image was built
+# with. Updating at boot means a fresh container starts current.
+#
+# Not fatal: a failure here should not stop the workspace from coming up.
+claude update </dev/null || echo "WARNING: could not check for claude updates"
+
 MARKET=aiwr
-MARKET_DIR=~/.claude/aiwr-marketplace
+# Inside the config directory so it persists with everything else. ~/.claude
+# is not mounted any more, so a marketplace there would vanish on a recreate
+# while the registration pointing at it survived.
+MARKET_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/aiwr-marketplace"
 
 PLUGIN_NAME="${PLUGIN_NAME:-ai-workspace}"
 PLUGIN_REPO="${PLUGIN_REPO:-sebmartin/ai-workspace-plugin}"
