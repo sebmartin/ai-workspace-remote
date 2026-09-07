@@ -414,14 +414,32 @@ archive grows, so keep an eye on it.
 
 ### Restoring
 
-What lands on the storage is a bare git repository, so:
+The backup is a bare git repository with two branches.
+
+- `main` is what you committed by hand.
+- `backup` is `main` plus one commit holding everything not yet committed.
+  This is the newer of the two.
+
+To get everything back, in the state it was in:
 
 ```bash
 git clone $BACKUP_MOUNT/workspace.git restored
+cd restored
+git checkout origin/backup -- .
+git reset
 ```
 
-Transcripts sit next to it under `claude-home/`, ready to copy into a fresh
-`$AIWR_ROOT/home`. Try the clone once before you trust any of this.
+That checks out `main`, overlays the files from `backup`, and unstages them,
+so `git status` shows the uncommitted work as uncommitted. No branch is
+moved, so the restored copy can still be pushed back.
+
+If you only want the files and do not care about the history,
+`git clone -b backup` is enough.
+
+Transcripts are in `claude-home/` beside the repository. Copy them into
+`$AIWR_ROOT/home`.
+
+Do this once before relying on it.
 
 ## Operations
 
