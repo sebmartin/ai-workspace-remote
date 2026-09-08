@@ -240,6 +240,44 @@ if [ ! -d "${BACKUP_MOUNT}/workspace.git" ]; then
   did "created ${BACKUP_MOUNT}/workspace.git"
 fi
 
+# Whoever finds this in five years, on a disk in a drawer, will have no idea
+# what it is. Two bare repositories and a directory of JSONL is not
+# self-explanatory.
+cat > "${BACKUP_MOUNT}/README.md" <<'MD'
+# Backup of an ai-workspace
+
+Written by ai-workspace-remote, which runs Claude Code against a workspace of
+markdown notes and keeps a copy here.
+
+https://github.com/sebmartin/ai-workspace-remote
+
+## What is here
+
+- `workspace.git`  a bare git repository holding the workspace.
+- `claude-home/`   Claude Code session transcripts, as JSONL. No credentials.
+- `.aiwr-backup`   a marker. The jobs refuse to write if it is missing, which
+                   is how they tell "the storage is mounted" from "this is an
+                   empty directory where the storage should have been".
+
+## Getting the files back
+
+`workspace.git` has two branches. `main` is what was committed by hand.
+`backup` is `main` plus one commit holding whatever had not been committed
+yet, so it is the newer of the two.
+
+    git clone this-directory/workspace.git restored
+    cd restored
+    git checkout origin/backup -- .
+    git reset
+
+That checks out `main`, lays the newer files over it, and leaves them as
+uncommitted changes, which is the state the workspace was in.
+
+Nothing needs to be installed on whatever machine holds this. It only ever
+receives files.
+MD
+did "wrote ${BACKUP_MOUNT}/README.md"
+
 # Last, so it is only ever there once everything above worked. The jobs treat
 # its absence as "the storage is not mounted" and refuse to write.
 touch "${BACKUP_MOUNT}/.aiwr-backup"
