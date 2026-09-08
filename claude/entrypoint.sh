@@ -42,21 +42,54 @@ PLUGIN_NAME="${PLUGIN_NAME:-ai-workspace}"
 PLUGIN_REPO="${PLUGIN_REPO:-sebmartin/ai-workspace-plugin}"
 
 mkdir -p "$MARKET_DIR/.claude-plugin"
+# `ref` is cloned with --branch and cannot take a commit. Commits go in `sha`,
+# a separate field wanting 40 lowercase hex.
 jq -n --arg m "$MARKET" --arg p "$PLUGIN_NAME" \
       --arg r "$PLUGIN_REPO" --arg f "${PLUGIN_REF:-}" \
   '{name: $m, owner: {name: "ai-workspace-remote"},
     plugins: [{
       name: $p,
       source: ({source: "github", repo: $r}
-               + (if $f == "" then {} else {ref: $f} end))
+               + (if $f == "" then {}
+                  elif ($f | test("^[0-9a-fA-F]{40}$")) then {sha: ($f | ascii_downcase)}
+                  else {ref: $f} end))
     }]}' > "$MARKET_DIR/.claude-plugin/marketplace.json"
 
-# All four are idempotent, and all four are needed. `marketplace add` does
-# not re-read a manifest it already knows, and `plugin install` is a no-op
-# once the plugin exists. Only `plugin update` re-resolves a changed ref, so
-# without it a new PLUGIN_REF would silently not take effect.
+# A short commit would be sent as a branch name and fail confusingly.
+case "${PLUGIN_REF:-}" in
+  [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*)
+    if [ "${#PLUGIN_REF}" -ne 40 ] && printf '%s' "$PLUGIN_REF" | grep -qE '^[0-9a-fA-F]+$'; then
+      echo "WARNING: PLUGIN_REF looks like a shortened commit. Use the full 40 characters."
+    fi ;;
+esac
+
+# `marketplace add` does not re-read a manifest it already knows, and
+# `plugin install` is a no-op once the plugin exists, so both are needed.
 claude plugin marketplace add "$MARKET_DIR" </dev/null
 claude plugin marketplace update "$MARKET" </dev/null
+
+# `plugin update` is keyed on the version in plugin.json, so a branch that
+# moved without a version bump reports "already at the latest version". Only a
+# reinstall re-resolves the ref, so compare commits and reinstall on a
+# mismatch. Unresolvable means keep what is installed.
+INSTALLED="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"
+
+if printf '%s' "${PLUGIN_REF:-}" | grep -qE '^[0-9a-fA-F]{40}$'; then
+  want="$(printf '%s' "$PLUGIN_REF" | tr 'A-F' 'a-f')"
+else
+  want="$(git ls-remote "https://github.com/${PLUGIN_REPO}" "${PLUGIN_REF:-HEAD}" 2>/dev/null \
+          | awk 'NR==1 {print $1}')"
+fi
+have="$(jq -r --arg id "$PLUGIN_NAME@$MARKET" \
+          '.plugins[$id][0].gitCommitSha // ""' "$INSTALLED" 2>/dev/null || true)"
+
+if [ -z "$want" ]; then
+  echo "WARNING: could not resolve ${PLUGIN_REF:-the default branch}, keeping the installed copy"
+elif [ -n "$have" ] && [ "$want" != "$have" ]; then
+  echo "plugin: ${have:0:7} -> ${want:0:7}, reinstalling"
+  claude plugin uninstall "$PLUGIN_NAME@$MARKET" </dev/null >/dev/null 2>&1 || true
+fi
+
 claude plugin install "$PLUGIN_NAME@$MARKET" --scope user </dev/null
 claude plugin update "$PLUGIN_NAME@$MARKET" </dev/null \
   || echo "WARNING: $PLUGIN_NAME may not be at ${PLUGIN_REF:-its default branch}"

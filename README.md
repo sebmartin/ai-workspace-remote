@@ -235,8 +235,26 @@ docker compose up -d            # recreate with the new setting
 make plugins                    # confirm what is actually live
 ```
 
-Claude Code does the fetching and caches by resolved sha. Clear `PLUGIN_REF`
-and redeploy to go back to the default branch.
+`PLUGIN_REF` takes a branch, a tag, or a full 40 character commit. A short
+commit does not work, and neither does putting a commit where a branch goes:
+they are different fields in the manifest, so the entrypoint looks at the
+value and writes whichever one fits.
+
+On every start the ref is resolved to a commit with `git ls-remote` and
+compared against the commit that is installed. They differ, it reinstalls.
+They match, it does nothing.
+
+That comparison is what makes pushing to a branch and restarting pick up the
+new commit. Both the install cache and `plugin update` are keyed on the
+version in `plugin.json`, so an updated branch otherwise reports "already at
+the latest version" and keeps serving the old commit.
+
+Leaving `PLUGIN_REF` empty resolves the default branch, so it behaves exactly
+as naming that branch does. If the commit cannot be resolved, nothing is
+uninstalled and the installed copy keeps working, so a network outage at boot
+does not cost you the plugin.
+
+Clear `PLUGIN_REF` and redeploy to go back to the default branch.
 
 Any other plugins you want are installed by hand inside the container with
 `claude plugin`, and persist in the mounted `.claude`.
