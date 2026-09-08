@@ -34,9 +34,8 @@ shell: ## Shell into claude-remote
 	docker compose exec claude-remote bash
 
 # `run`, not `exec`: nothing is up yet, and the service cannot start without
-# credentials. Signing in is all this does now. The three questions Claude
-# asks on a first run are answered by init, in the config file it writes,
-# because the service has no way to answer them itself.
+# credentials. Signing in is all this does. Claude's other first-run questions
+# are answered by `make init`, in the config file it writes.
 login: ## Sign in, once
 	docker compose run --rm claude-remote claude auth login
 	@echo

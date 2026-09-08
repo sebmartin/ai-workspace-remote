@@ -128,14 +128,17 @@ ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
 
 # Docker creates a directory here if the file is absent, and Claude then fails
 # in a way that does not mention it.
-# Seeded, not empty. Claude asks three things on a first run that the service
-# has no way to answer: onboarding, whether /workspace is trusted, and whether
-# to turn remote control on. Recording the answers up front is the difference
-# between `make up` working and it sitting on an unanswerable prompt.
+# Claude asks three things on a first run: onboarding, whether /workspace is
+# trusted, and whether to enable remote control. The service runs with nobody
+# attached to its terminal, so any of them would block it forever. Answering
+# them here is what lets `make up` work unattended.
 #
-# Only written when the file does not exist. After that it belongs to Claude.
-if [ ! -s "${AIWR_ROOT}/home/.claude.json" ]; then
-  cat > "${AIWR_ROOT}/home/.claude.json" <<'JSON'
+# Merged into an existing file, not only written to a new one. Seeding only on
+# creation silently does nothing on a root that has been used before, which is
+# exactly when the answers have been lost.
+CFG="${AIWR_ROOT}/home/.claude.json"
+if [ ! -s "${CFG}" ]; then
+  cat > "${CFG}" <<'JSON'
 {
   "hasCompletedOnboarding": true,
   "hasUsedRemoteControl": true,
@@ -147,8 +150,26 @@ if [ ! -s "${AIWR_ROOT}/home/.claude.json" ]; then
   }
 }
 JSON
-  chmod 600 "${AIWR_ROOT}/home/.claude.json"
-  did "created home/.claude.json, with the first-run questions pre-answered"
+  chmod 600 "${CFG}"
+  did "created home/.claude.json with the first-run questions answered"
+elif command -v jq >/dev/null 2>&1; then
+  tmp="$(mktemp "${CFG}.XXXXXX")"
+  if jq '.hasCompletedOnboarding = true
+       | .hasUsedRemoteControl = true
+       | .remoteDialogSeen = true
+       | .projects["/workspace"].hasTrustDialogAccepted = true' "${CFG}" > "${tmp}" 2>/dev/null; then
+    if cmp -s "${tmp}" "${CFG}"; then
+      rm -f "${tmp}"
+    else
+      mv "${tmp}" "${CFG}"; chmod 600 "${CFG}"
+      did "answered the first-run questions in home/.claude.json"
+    fi
+  else
+    rm -f "${tmp}"; note "could not read ${CFG}, leaving it alone"
+  fi
+else
+  note "jq is not installed, so ${CFG} was left as it is." \
+       "If the service sits there doing nothing, run \`make login\` once."
 fi
 
 if [ ! -d "${AIWR_ROOT}/workspace/.git" ]; then
