@@ -42,8 +42,15 @@ FORBIDDEN_BASENAMES='^(\.credentials\.json|\.claude\.json|settings\.json|setting
 # intends to send before sending any of it.
 guard() {
   local listing offenders
-  listing="$(rsync -a --dry-run --out-format='%n' --prune-empty-dirs \
-               "${FILTER[@]}" "${SRC}/" /tmp/guard-dest/ 2>/dev/null || true)"
+  # Capture the status. `|| true` here would mean a failed dry run yields an
+  # empty listing, finds no offenders, and lets the real transfer run
+  # unchecked. This is the guard standing between a filter typo and
+  # credentials on another disk.
+  if ! listing="$(rsync -a --dry-run --out-format='%n' --prune-empty-dirs \
+                    "${FILTER[@]}" "${SRC}/" /tmp/guard-dest/ 2>/dev/null)"; then
+    log error guard_dry_run_failed "cannot tell what would be sent; refusing to transfer"
+    return 1
+  fi
 
   offenders="$(printf '%s\n' "${listing}" \
     | sed 's:/*$::' \
@@ -63,9 +70,9 @@ run() {
   mkdir -p /tmp/guard-dest
   guard || return 1
 
-  local ssh dest
-  ssh="$(ssh_cmd)"
-  dest="${NAS_USER}@${NAS_HOST}:${NAS_TRANSCRIPTS_PATH}"
+  require_dest
+  local dest="${DEST}/claude-home"
+  mkdir -p "${dest}"
 
   # No --delete. If Claude prunes an old session locally the copy is still
   # wanted, which is precisely the catastrophic-failure case this covers.
@@ -76,18 +83,13 @@ run() {
   # on read and the next run picks up the complete file.
   # Output to a file, not a pipe: `rsync | grep || true` would discard the
   # exit status and report a failed transfer as a success.
-  timeout 900 rsync -a --partial-dir=.rsync-partial --timeout=600 \
-    --prune-empty-dirs --stats \
-    -e "${ssh}" "${FILTER[@]}" \
+  rsync -a --prune-empty-dirs --stats \
+    "${FILTER[@]}" \
     "${SRC}/" "${dest}/" > /tmp/transcripts.out
   grep -E '^(Number of regular files transferred|Total transferred)' /tmp/transcripts.out || true
 
   info mirrored "dest=${dest}"
-  record_success
+  warn_clear
 }
 
-# Take the lock first, then call the job bare so errexit still applies to it.
-# The next tick retries, and a lock held long enough to matter shows up as
-# staleness in the healthcheck.
-take_lock "${TRANSCRIPTS_LOCK}" || { warn skipped "reason=lock_held"; exit 0; }
 run

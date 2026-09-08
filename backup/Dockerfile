@@ -1,8 +1,8 @@
-# Commits the workspace, mirrors the bare repo and the session transcripts to
-# the NAS over SSH, and keeps the local repo healthy.
+# Commits the workspace to a git repo on the mounted backup storage, copies
+# the session transcripts alongside it, and keeps both repos healthy.
 #
-# The NAS only ever receives files. It never runs git, so git never has to be
-# installed there and git's ref locking never touches a network filesystem.
+# The storage is whatever the OS mounted. Docker bind-mounts it at /backup and
+# this container writes to it as an ordinary directory.
 
 FROM alpine:3.21
 
@@ -20,10 +20,8 @@ RUN apk add --no-cache \
       coreutils \
       curl \
       git \
-      openssh-client \
       rsync \
-      tzdata \
-      flock
+      tzdata
 
 RUN curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPERCRONIC_VERSION}/supercronic-linux-${SUPERCRONIC_ARCH}" \
  && echo "${SUPERCRONIC_SHA256}  supercronic-linux-${SUPERCRONIC_ARCH}" | sha256sum -c - \
@@ -34,7 +32,7 @@ RUN curl -fsSLO "https://github.com/aptible/supercronic/releases/download/${SUPE
 # environment, not PID 1's, so a manually invoked job would otherwise have no
 # git identity and no writable HOME.
 ENV HOME=/tmp \
-    GIT_CONFIG_GLOBAL=/backup/gitconfig
+    GIT_CONFIG_GLOBAL=/tmp/gitconfig
 
 COPY --chmod=755 entrypoint.sh /opt/aiwr/entrypoint.sh
 COPY --chmod=755 scripts/ /opt/aiwr/
