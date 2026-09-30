@@ -26,7 +26,7 @@ run() {
   # make live objects look unreachable, and a gc would then prune them.
   if ! git_dest fsck --full --strict --no-progress --no-dangling; then
     log error fsck_failed "skipping the gc so it cannot prune live objects"
-    warn_set "The backup repository failed its integrity check" \
+    warn_raise "the repository failed its integrity check" \
       "\`git fsck\` reported problems in ${DEST_GIT_DIR}. The weekly repack was skipped, because repacking a corrupt repository can delete objects that are still needed. New snapshots are still being written." \
       "git --git-dir=${DEST_GIT_DIR} fsck --full"
     exit 1
