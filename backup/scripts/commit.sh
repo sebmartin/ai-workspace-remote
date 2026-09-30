@@ -54,7 +54,7 @@ run() {
 
   # A repository with no commits is a legitimate state, not a failure. There
   # is nothing to snapshot onto, so say so and stop rather than reporting a
-  # problem that would sit in WARNINGS.md until someone made a commit.
+  # problem that would sit in workspace/WARNINGS/ until someone made a commit.
   if ! head="$(git_ws rev-parse -q --verify HEAD)"; then
     info no_commits_yet "nothing to snapshot"
     record_success

@@ -25,8 +25,8 @@ git config --global user.name  "ai-workspace-backup"
 git config --global user.email "backup@localhost"
 
 # Deliberately not fatal. A crash-looping container tells nobody anything.
-# Coming up lets the jobs write WARNINGS.md into the workspace, which is the
-# whole point of having it.
+# Coming up lets the jobs write their fault files into workspace/WARNINGS/,
+# which is the whole point of having them.
 [ -f "${DEST}/.aiwr-backup" ] \
   || log warn dest_unverified "${DEST} has no marker; jobs will report this until it is mounted"
 

@@ -160,7 +160,7 @@ That matters because an unmounted path is an empty directory, and Docker
 creates one if it is missing. Without the check, git and rsync would write to
 the Docker host's own disk and report success, and you would find out when you
 needed the backup. If the file is gone, the jobs refuse to run and say so in
-`WARNINGS.md`.
+`WARNINGS/`.
 
 ### Two things worth knowing
 
@@ -382,7 +382,7 @@ not needing SSH. Ref updates on the backup take git's own `.lock` files on
 that filesystem, which cifs and nfs handle for a single serialized writer, and
 that is what this is. The visible failure mode is a stale
 `refs/heads/backup.lock` after an interrupted push, which blocks later pushes
-until you delete it. It shows up in `WARNINGS.md`.
+until you delete it. It shows up in `WARNINGS/`.
 
 **The weekly fsck is not optional**, and it now checks the real backup rather
 than a local copy of it. It runs before the repack, not after, because on an
@@ -392,22 +392,42 @@ warning. Snapshots keep being written, because refusing them would only
 guarantee that the newest work exists nowhere.
 
 **Failures are loud, in the place you are already looking.** A failing job
-writes `WARNINGS.md` into the root of the workspace, saying what broke and how
-to fix it, and deletes it once the job succeeds again. The container also
-reports unhealthy while that file exists, but a file in the workspace is seen
-by whoever is working there, and an unhealthy container is seen by nobody.
+writes a file into `WARNINGS/` in the root of the workspace, saying what broke
+and how to fix it, and deletes it once the job succeeds again. The container
+also reports unhealthy while one of its files is there, but an unhealthy
+container is seen by nobody and the workspace is where attention already is.
 
-### WARNINGS.md
+### WARNINGS/
 
-When a backup job fails it writes `WARNINGS.md` into the root of the
-workspace, with a section per failing job saying what broke and the command
-that fixes it. The job removes its own section when it next succeeds, and the
-file is deleted once the last section goes. Its absence means everything is
-working.
+When a backup job fails it writes one file into `WARNINGS/` in the root of the
+workspace, named `backup-<job>.transient.md`, saying what broke and the command
+that fixes it. The job deletes its own file when it next succeeds. An empty or
+absent directory means everything is working.
 
-It is gitignored, so it never enters a snapshot. That is not tidiness: the
-file carries a timestamp, and in the tree it would change the commit every
-hour and defeat the no-op idle tick.
+**One file per fault, rather than one file with a section per job.** Several
+tools write faults into this workspace, and a single shared file means each of
+them has to parse the whole thing to rewrite its own part, in whatever language
+it happens to be written in. Whole-file writes need no parser at all, and
+because nothing does read-modify-write, two writers cannot drop each other's
+faults. Each file is markdown its author wrote, and nothing parses anyone
+else's.
+
+**The heading names the job**, so `cat WARNINGS/*.md` tells you whether three
+jobs failed on one root cause or one job failed. A writer cannot forget to
+identify itself, because it does not write the heading.
+
+**This repo only writes and reads the workspace root.** Faults about one thread
+belong to the plugin and live in that thread's own directory, so they surface
+when you open that thread rather than every time. Nothing here knows what
+`threads/` means, and the backup container's health reports on `backup-*`
+faults only.
+
+**`.transient.md` keeps a fault out of history.** A fault about a running
+container is not true after a restore somewhere else, so it must not travel
+with the files. A fault about the state of the files still is true, and has to.
+`make init` writes one gitignore pattern for the suffix rather than an entry
+per writer, because a registry is a thing every future writer has to remember
+to update and forgetting would be silent.
 
 ### Transcripts are handled separately, and carefully
 
@@ -521,7 +541,7 @@ snapshot is the safety net.
 **If the storage is not mounted, nothing is backed up anywhere.** There is no
 intermediate copy on the Docker host to fall back on. The `.aiwr-backup`
 marker is what makes that loud rather than silent: the jobs refuse to run and
-`WARNINGS.md` says so. But if you unmount the storage and ignore the warning,
+`WARNINGS/` says so. But if you unmount the storage and ignore the warning,
 snapshots simply stop.
 
 **The agent can delete the workspace's git history.** `.git` lives inside the
@@ -551,7 +571,7 @@ password, `.env` holds paths. Both are gitignored.
 | `make plugins` shows `enabled: false` | the same plugin name is installed from two marketplaces |
 | Stop takes the full grace period | SIGTERM is not reaching claude, check `init: true` |
 | Share not visible in Finder | expected, connect with ⌘K, there is no discovery |
-| Backup container unhealthy | read `WARNINGS.md` in the workspace, which says which job failed and why |
+| Backup container unhealthy | read the files in `WARNINGS/` in the workspace, which say which job failed and why |
 | claude-remote restarting in a loop on first run | no credentials yet. Run `make login`, which does not need the stack up |
 | `dest_missing` in the logs | `BACKUP_MOUNT` has no `.aiwr-backup` marker, so the storage is not mounted. Mount it, then `make init` |
 | `cannot lock ref 'refs/heads/backup'` | a stale `.lock` in `$BACKUP_MOUNT/workspace.git` after an interrupted push. Delete it |

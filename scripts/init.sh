@@ -181,11 +181,17 @@ if [ ! -d "${AIWR_ROOT}/workspace/.git" ]; then
   did "git init workspace/"
 fi
 
-# WARNINGS.md is a live status file the backup jobs write. Ignoring it keeps it
-# out of the snapshot, which matters because it carries a timestamp: in the
-# tree it would change the commit every hour and defeat the no-op idle tick.
+# Faults are written as files in workspace/WARNINGS/. A `.transient.md` one is
+# about a running container rather than about the files, so it must not survive
+# into history: restore the workspace somewhere else and the condition it
+# describes does not come with it. Everything else there is kept, because a
+# fault about the state of the files is still true after a restore and the
+# warning saying so has to come back with them.
+#
+# One pattern, not one entry per writer. A registry here would be a thing every
+# future writer has to know to update, and forgetting would be silent.
 GI="${AIWR_ROOT}/workspace/.gitignore"
-for line in '.DS_Store' '._*' '.Spotlight-V100' '.Trashes' '/WARNINGS.md'; do
+for line in '.DS_Store' '._*' '.Spotlight-V100' '.Trashes' '*.transient.md'; do
   grep -qxF "${line}" "${GI}" 2>/dev/null || { printf '%s\n' "${line}" >> "${GI}"; did "added ${line} to workspace/.gitignore"; }
 done
 
