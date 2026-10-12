@@ -98,6 +98,14 @@ SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
 [ -n "${SRC_MOUNT}" ] && set_key SRC_MOUNT "${SRC_MOUNT}"
 SRC_DIR="${SRC_MOUNT:-${AIWR_ROOT}/src}"
 
+# Reported here with the other two, because it is the one path nothing asked
+# about, which makes it the one most worth confirming on screen.
+if [ -n "${SRC_MOUNT}" ]; then
+  ok "SRC_MOUNT=${SRC_MOUNT}"
+else
+  ok "SRC_MOUNT is unset, so /src is ${SRC_DIR}"
+fi
+
 for stale in NAS_HOST NAS_USER NAS_ROOT NAS_PORT; do
   [ -n "$(get "${stale}")" ] && note "${stale} is no longer used and is ignored. Delete it when you like."
 done
