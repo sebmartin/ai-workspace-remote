@@ -38,8 +38,10 @@ flowchart TB
         smb["samba"]
         bk["backup"]
         ws[("/workspace<br>local disk, git repo")]
+        src[("/src<br>source repos<br>not backed up")]
 
         claude <--> ws
+        claude <--> src
         smb <--> ws
         ws -.-> bk
     end
@@ -144,7 +146,8 @@ real one cannot run at the same time.
 ### What init does
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
-tree, sets ownership and mode, makes `workspace/` a git repo if it is empty,
+tree, sets ownership and mode, creates the source directory if `SRC_MOUNT` is
+unset, makes `workspace/` a git repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -214,13 +217,65 @@ if Windows is a first-class client: add `Thumbs.db` and `desktop.ini` to
 `veto files`, and lower `server min protocol` if you need to support anything
 older than Windows 8, which is where SMB3 and encryption arrived.
 
-## Plugins, and pinning one to a branch
+## Plugins
 
-Claude installs plugins as `name@marketplace`, only from a registered
-marketplace, never straight from a repo URL, and nothing in the CLI takes a
-git ref. So the container keeps its own single-entry marketplace on disk and
-writes the repo and ref into its manifest. It is rebuilt on every start, so
-switching refs needs no cleanup.
+Which plugins Claude starts with is a setting, not something baked into the
+image. There are three ways in, for three different kinds of plugin, and a
+deployment can use any combination of them.
+
+### Published plugins
+
+A plugin that has been released lives in a marketplace and has a version
+number, so nothing has to be pinned. Register the marketplaces, then name the
+plugins:
+
+```bash
+CLAUDE_MARKETPLACES=anthropics/claude-plugins-official
+CLAUDE_PLUGINS=superpowers@claude-plugins-official plugin-dev@claude-plugins-official
+```
+
+Both are space-separated. A marketplace source can be a GitHub repo, a URL or
+a path. A plugin id is `name@marketplace`, where the marketplace name comes
+from that marketplace's own manifest, which is usually but not always the last
+part of the repo name. `claude plugin marketplace list` in the container shows
+the names it resolved.
+
+Both are empty unless you set them, because which plugins a workspace wants
+is a deployment's choice rather than this repo's. The pair above is a
+reasonable starting point and is shown commented out in `.env.example`.
+
+### Plugins you are developing
+
+A plugin being worked on is not in any marketplace. Put the checkout under
+`/src` and name its path:
+
+```bash
+CLAUDE_PLUGIN_PATHS=/src/ai-workspace-plugin /src/my-other-plugin
+```
+
+Each path needs a `.claude-plugin/plugin.json`, and the `name` in it is the
+name the plugin is installed under. The container generates a marketplace for
+them, symlinking each path into it, because a marketplace entry's source has
+to be a relative path that stays inside the marketplace directory.
+
+**These are reinstalled from disk on every start, so edits take effect on
+`make restart` rather than on save.** Installing a plugin copies it into the
+config directory under its version number, and `plugin update` only notices a
+bumped version, so a plugin edited without a version bump otherwise reports
+"already at the latest version" and keeps serving the old copy. Reinstalling
+unconditionally sidesteps that. A local directory copy is cheap, so there is
+no reason to try to detect the change instead.
+
+A path dropped from the list is uninstalled on the next start.
+
+### Pinning one to a branch
+
+The third way is for installing a plugin from GitHub at a particular ref, with
+no checkout on the box. Claude installs plugins as `name@marketplace`, only
+from a registered marketplace, never straight from a repo URL, and nothing in
+the CLI takes a git ref. So the container keeps its own single-entry
+marketplace on disk and writes the repo and ref into its manifest. It is
+rebuilt on every start, so switching refs needs no cleanup.
 
 The plugin is installed on every start. `PLUGIN_REPO` and `PLUGIN_NAME`
 default to the ai-workspace plugin, so the only thing you normally set is the
@@ -256,8 +311,33 @@ does not cost you the plugin.
 
 Clear `PLUGIN_REF` and redeploy to go back to the default branch.
 
-Any other plugins you want are installed by hand inside the container with
-`claude plugin`, and persist in the mounted `.claude`.
+Set `PLUGIN_REPO=none` to turn this path off, which is what you want once the
+same plugin is listed in `CLAUDE_PLUGIN_PATHS` instead.
+
+Anything else you install by hand inside the container with `claude plugin`
+persists in the mounted config directory, but it is not recorded anywhere, so
+prefer the settings above for anything you would want back after a rebuild.
+
+## Source code, for coding work
+
+`SRC_MOUNT` is a host directory mounted read-write at `/src`, where Claude can
+check out repositories and work on them.
+
+```bash
+SRC_MOUNT=/home/you/code        # empty to use a src/ directory under AIWR_ROOT
+```
+
+It is deliberately not part of the workspace. These are git repositories with
+their own history and remotes, so putting them under `AIWR_ROOT` would pull
+them into the hourly snapshot and the SMB share, duplicating version control
+they already have.
+
+The consequence is the thing to know: **`/src` is not backed up.** Nothing on
+`BACKUP_MOUNT` covers it. Work that has not been pushed exists only on this
+machine, and only until the disk does not. Push branches as you go.
+
+It is also mounted only into `claude-remote`, so it is not in the SMB share
+and not visible to the backup container.
 
 ## The device name in claude.ai
 
@@ -537,6 +617,13 @@ minutes of, and a bad one if you were expecting redundancy. If the workspace
 previously lived on a NAS with RAID, be aware you have traded that for this.
 Whether the backup is on a different machine is now your choice, since any
 mount will do. A second internal disk does not survive what takes the box out.
+
+**`/src` is not backed up.** The backup is a git journal of the workspace, and
+source repositories carry their own nested `.git`, which that mechanism cannot
+take. Backing them up needs a different one, and it has not been built, so
+unpushed work under `/src` has no copy anywhere. It also has a question
+attached: a source tree holds `.env` files and other credentials, and
+`BACKUP_MOUNT` is append-only, so anything written there cannot be retracted.
 
 **`secrets/` and `.env` are the security perimeter.** `secrets/` holds the SMB
 password, `.env` holds paths. Both are gitignored.

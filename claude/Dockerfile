@@ -2,7 +2,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq less openssh-client passwd procps util-linux \
-      python3 python3-venv ripgrep fd-find tree unzip vim-tiny \
+      python3 python3-venv ripgrep fd-find tree unzip vim-tiny chromium \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd
 

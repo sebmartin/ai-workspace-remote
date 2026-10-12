@@ -7,6 +7,12 @@
 #
 # The backup itself is not under that root. BACKUP_MOUNT names a directory on
 # storage the OS has mounted, and it arrives at /backup in the backup container.
+#
+# SRC_MOUNT is not under it either, and deliberately: it holds source
+# repositories, which carry their own git history and remotes. Putting them
+# under AIWR_ROOT would pull them into the workspace snapshot and the SMB
+# share, duplicating version control they already have. It is mounted only
+# into claude-remote, and nothing backs it up yet.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -42,6 +48,10 @@ services:
       # rewritten by rename and a single-file bind mount cannot be replaced,
       # so anything Claude recorded there was silently lost on restart.
       - ${AIWR_ROOT:?}/home:/config
+      # Source repositories to do coding work in. Defaults to a directory
+      # under AIWR_ROOT only so the stack still comes up when SRC_MOUNT is
+      # unset; a real deployment points it at wherever the code lives.
+      - ${SRC_MOUNT:-${AIWR_ROOT:?}/src}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
@@ -59,6 +69,12 @@ services:
       PLUGIN_NAME: ${PLUGIN_NAME:-}
       PLUGIN_REPO: ${PLUGIN_REPO:-}
       PLUGIN_REF: ${PLUGIN_REF:-}
+      # Which plugins this deployment preloads. No defaults: which plugins a
+      # workspace wants is the deployment's choice, not this repo's, so unset
+      # means none. .env.example shows the ones worth considering.
+      CLAUDE_MARKETPLACES: ${CLAUDE_MARKETPLACES:-}
+      CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
+      CLAUDE_PLUGIN_PATHS: ${CLAUDE_PLUGIN_PATHS:-}
 
   samba:
     build: ./samba

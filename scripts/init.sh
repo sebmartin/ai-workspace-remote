@@ -123,6 +123,22 @@ sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
 
+# Mounted at /src for coding work. Only created when SRC_MOUNT is unset and
+# the compose default under AIWR_ROOT applies; a path the user named is theirs
+# to create, and silently making a directory at a typo would hide the typo.
+SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
+if [ -z "${SRC_MOUNT}" ]; then
+  sudo mkdir -p "${AIWR_ROOT}/src"
+  sudo chown "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}/src"
+  ok "src/ for source repositories, mounted at /src"
+elif [ -d "${SRC_MOUNT}" ]; then
+  ok "SRC_MOUNT=${SRC_MOUNT}, mounted at /src"
+else
+  die "SRC_MOUNT is set to ${SRC_MOUNT}, which does not exist." \
+      "Create it, or clear SRC_MOUNT in .env to use ${AIWR_ROOT}/src instead."
+fi
+note "/src is not backed up. Push your work, or it only exists on this machine."
+
 [ -d "${AIWR_ROOT}/backup" ] \
   && note "${AIWR_ROOT}/backup is left over from the old layout and is no longer used. It may still be your only backup, so check the new one before deleting it."
 
