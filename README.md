@@ -112,20 +112,16 @@ is idempotent, so run it again any time to re-check a setup.
 
 ### What it asks for
 
-Three things, because everything else in `.env` has a working default. Where
-everything lives, where the backup goes, and where your code is.
+Two things, because everything else in `.env` has a working default. Where does
+everything live, and where does the backup go.
 
 | variable | what it is |
 |---|---|
 | `AIWR_ROOT` | one directory holding everything this stack owns |
 | `BACKUP_MOUNT` | a directory on storage the OS has already mounted |
-| `SRC_MOUNT` | a directory of source repositories, mounted at `/src` |
 
-All three are required and none has a default. A default would be this repo
-guessing where someone else's files belong, and getting it wrong quietly. If
-one is missing, `make up` and `make rebuild` both stop before doing anything
-and name it. They name one at a time, so fixing one can reveal the next, and
-`make init` asks for all of them in one pass.
+Neither has a default, and if either is missing `make up` and `make rebuild`
+stop before doing anything and name it.
 
 Everything else in `.env` has a working default and can be left alone.
 `WORKSPACE_UID` and `WORKSPACE_GID` are written by `make init` from whoever
@@ -137,14 +133,14 @@ runs it, so they always match the files on disk.
 $AIWR_ROOT/
   workspace/   the git repo, shared over SMB, where the agent works
   home/        Claude's home, so .claude/ and .claude.json
+  src/         source repositories, unless SRC_MOUNT points elsewhere
 ```
 
 `home/` is a sibling of `workspace/` and not a child, deliberately. Inside the
 workspace it would be committed, shared over SMB and copied to the backup.
 
 The backup is not under that root. It lives on `BACKUP_MOUNT`, which holds a
-bare `workspace.git` and a `claude-home` directory. Source code is not under
-it either, and lives on `SRC_MOUNT`.
+bare `workspace.git` and a `claude-home` directory.
 
 One root also means one value to change to stand up a second, fully isolated
 stack, which is how to try this out without pointing anything at a workspace
@@ -154,8 +150,8 @@ real one cannot run at the same time.
 ### What init does
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
-tree, sets ownership and mode, creates `SRC_MOUNT`, makes `workspace/` a git
-repo if it is empty,
+tree, sets ownership and mode, creates the source directory, makes
+`workspace/` a git repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -328,25 +324,22 @@ prefer the settings above for anything you would want back after a rebuild.
 
 ## Source code, for coding work
 
-`SRC_MOUNT` is a host directory mounted read-write at `/src`, where Claude can
-check out repositories and work on them. It is required, like the other two
-mounts, and `make init` asks for it.
+Claude works on source code in `/src`, which is `src/` under `AIWR_ROOT` by
+default. Set `SRC_MOUNT` only if your code lives somewhere else:
 
 ```bash
 SRC_MOUNT=/srv/src
 ```
 
-It is deliberately not part of the workspace. These are git repositories with
-their own history and remotes, so putting them under `AIWR_ROOT` would pull
-them into the hourly snapshot and the SMB share, duplicating version control
-they already have.
+Either way it is a sibling of `workspace/` and not inside it. That is what
+keeps it out of the hourly snapshot and the SMB share, since both of those
+mount `$AIWR_ROOT/workspace` specifically rather than the root. It is also
+mounted only into `claude-remote`, so the backup container cannot see it at
+all.
 
 The consequence is the thing to know: **`/src` is not backed up.** Nothing on
 `BACKUP_MOUNT` covers it. Work that has not been pushed exists only on this
 machine, and only until the disk does not. Push branches as you go.
-
-It is also mounted only into `claude-remote`, so it is not in the SMB share
-and not visible to the backup container.
 
 ## The device name in claude.ai
 
@@ -570,9 +563,9 @@ because the entrypoint is copied into the image rather than read from disk.
 
 ### After pulling a new version
 
-Run `make init` before `make up`. It is idempotent, and it is what fills in
-any setting the new version requires that your `.env` predates. If you skip
-it and something is missing, `make up` stops and names the variable rather
+Run `make init` before `make up`. It is idempotent, and it is what creates
+anything a new version expects that your existing tree does not have. If
+something required is missing, `make up` stops and names the variable rather
 than starting a half-configured stack.
 
 Use `docker compose exec`, never `docker attach`. Attaching to a `tty: true`
@@ -635,9 +628,11 @@ previously lived on a NAS with RAID, be aware you have traded that for this.
 Whether the backup is on a different machine is now your choice, since any
 mount will do. A second internal disk does not survive what takes the box out.
 
-**`/src` is not backed up.** The backup is a git journal of the workspace, and
-source repositories carry their own nested `.git`, which that mechanism cannot
-take. Backing them up needs a different one, and it has not been built, so
+**`/src` is not backed up.** It is a sibling of `workspace/`, and the backup
+container mounts `workspace/` rather than the root, so nothing there reaches
+it. Pointing the existing mechanism at it would not work either: that is a git
+journal, and source repositories carry their own nested `.git`, which a
+containing repository cannot track. Backing them up needs a different one, and it has not been built, so
 unpushed work under `/src` has no copy anywhere. It also has a question
 attached: a source tree holds `.env` files and other credentials, and
 `BACKUP_MOUNT` is append-only, so anything written there cannot be retracted.

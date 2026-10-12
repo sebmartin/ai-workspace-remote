@@ -79,13 +79,10 @@ ask AIWR_ROOT \
   /srv/ai-workspace
 ask BACKUP_MOUNT \
   "BACKUP_MOUNT is where the backup goes: a directory on storage you have already mounted. A NAS share, a second disk, a USB enclosure. Mount it first, because an unmounted path is an empty directory and the backup would fill this machine's disk instead."
-ask SRC_MOUNT \
-  "SRC_MOUNT is where your source repositories live, mounted at /src for coding work. It is kept out of the workspace because these are git repositories with their own remotes, which also means it is not backed up." \
-  /srv/src
 
 # Also normalise values that were already in .env, whether hand-edited or
 # written before this ran.
-for key in AIWR_ROOT BACKUP_MOUNT SRC_MOUNT; do
+for key in AIWR_ROOT BACKUP_MOUNT; do
   raw="$(get "${key}")"
   trimmed="$(trim_slashes "${raw}")"
   [ -z "${trimmed}" ] && die "${key} is set to ${raw}, which is not a usable path."
@@ -94,7 +91,12 @@ done
 
 AIWR_ROOT="$(get AIWR_ROOT)"
 BACKUP_MOUNT="$(get BACKUP_MOUNT)"
-SRC_MOUNT="$(get SRC_MOUNT)"
+
+# Empty is the normal case and means src/ under AIWR_ROOT, which is what
+# compose falls back to.
+SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
+[ -n "${SRC_MOUNT}" ] && set_key SRC_MOUNT "${SRC_MOUNT}"
+SRC_DIR="${SRC_MOUNT:-${AIWR_ROOT}/src}"
 
 for stale in NAS_HOST NAS_USER NAS_ROOT NAS_PORT; do
   [ -n "$(get "${stale}")" ] && note "${stale} is no longer used and is ignored. Delete it when you like."
@@ -116,14 +118,18 @@ echo "Setting up ${AIWR_ROOT}"
 if [ -t 0 ] && [ -d "${AIWR_ROOT}" ] && [ -n "$(ls -A "${AIWR_ROOT}" 2>/dev/null)" ]; then
   if [ ! -d "${AIWR_ROOT}/workspace" ]; then
     printf '\n%s already exists and is not empty.\n' "${AIWR_ROOT}"
-    printf 'This will chown everything under it to %s and set it 0700.\n' "${UID_NOW}"
+    printf 'This will chown workspace/ and home/ under it to %s and set it 0700.\n' "${UID_NOW}"
     read -r -p "Continue? [y/N]: " reply || die "Cancelled."
     case "${reply}" in y|Y|yes) ;; *) die "Stopped. Set AIWR_ROOT to somewhere else." ;; esac
   fi
 fi
 
 sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
-sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
+sudo chown "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
+# Only workspace/ and home/, not the whole root. src/ can sit here too, and
+# recursing into source repositories every run would be a slow walk over
+# build output for no reason, and would flatten any ownership set inside them.
+sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
 
@@ -288,13 +294,19 @@ touch "${BACKUP_MOUNT}/.aiwr-backup"
 ok "backup storage ready and marked"
 
 echo
-echo "Setting up ${SRC_MOUNT}"
+echo "Setting up ${SRC_DIR}"
 
-# No sudo, for the same reason BACKUP_MOUNT uses none: it has to be writable
-# by the uid the container runs as, which is the uid running this, and
-# creating it is the check that it is.
-mkdir -p "${SRC_MOUNT}" 2>/dev/null \
-  || die "Cannot create ${SRC_MOUNT}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
+# It has to exist before the stack starts, because Docker creates a missing
+# bind mount source as root and Claude could then not write to it.
+if [ -z "${SRC_MOUNT}" ]; then
+  sudo mkdir -p "${SRC_DIR}"
+  sudo chown "${UID_NOW}:${GID_NOW}" "${SRC_DIR}"
+else
+  # A path outside the root we own, so no sudo: it has to be writable by the
+  # uid the containers run as, and creating it is the check that it is.
+  mkdir -p "${SRC_DIR}" 2>/dev/null \
+    || die "Cannot create ${SRC_DIR}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
+fi
 ok "source repositories, mounted at /src"
 note "/src is not backed up. Push your work, or it only exists on this machine."
 

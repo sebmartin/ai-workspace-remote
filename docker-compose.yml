@@ -8,14 +8,12 @@
 # The backup itself is not under that root. BACKUP_MOUNT names a directory on
 # storage the OS has mounted, and it arrives at /backup in the backup container.
 #
-# SRC_MOUNT is not under it either, and deliberately: it holds source
-# repositories, which carry their own git history and remotes. Putting them
-# under AIWR_ROOT would pull them into the workspace snapshot and the SMB
-# share, duplicating version control they already have. It is mounted only
-# into claude-remote, and nothing backs it up yet.
+#   ${SRC_MOUNT}            source repositories, mounted at /src
 #
-# All three mounts are required. A default for any of them would be this repo
-# guessing where someone else's files belong.
+# SRC_MOUNT defaults to src/ under AIWR_ROOT and is only set when the code
+# lives somewhere else. Either way it is a sibling of workspace/ rather than
+# inside it, so it is not in the snapshot and not in the SMB share: both of
+# those mount ${AIWR_ROOT}/workspace specifically. Nothing backs it up.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -51,9 +49,10 @@ services:
       # rewritten by rename and a single-file bind mount cannot be replaced,
       # so anything Claude recorded there was silently lost on restart.
       - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/config
-      # Source repositories to do coding work in. Required, like the other
-      # mounts: where the code lives is not something this repo can guess.
-      - ${SRC_MOUNT:?SRC_MOUNT is not set. It is where your source repositories live, mounted at /src. Run `make init`, which asks for it.}:/src
+      # Source repositories to do coding work in. Defaults to src/ under
+      # AIWR_ROOT, which is a fine place for it, so a deployment only sets
+      # SRC_MOUNT when the code lives somewhere else.
+      - ${SRC_MOUNT:-${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/src}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
