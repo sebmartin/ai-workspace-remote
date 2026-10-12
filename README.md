@@ -150,8 +150,8 @@ real one cannot run at the same time.
 ### What init does
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
-tree, sets ownership and mode, creates the source directory, makes
-`workspace/` a git repo if it is empty,
+tree, sets ownership and mode, creates the source directory and grants Claude
+access to it, makes `workspace/` a git repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -340,6 +340,22 @@ all.
 The consequence is the thing to know: **`/src` is not backed up.** Nothing on
 `BACKUP_MOUNT` covers it. Work that has not been pushed exists only on this
 machine, and only until the disk does not. Push branches as you go.
+
+### How Claude knows about it
+
+Two things, both set up by `make init`.
+
+Claude confines its file tools to the working directory, which is
+`/workspace`, so `/src` would be refused. `init` adds it to
+`permissions.additionalDirectories` in `home/settings.json`, which applies to
+every session including the ones remote-control spawns. That is why it is a
+setting rather than `--add-dir` on the command line.
+
+Nothing otherwise says what the directory is for, and an agent working in
+`/workspace` has no reason to guess, so `init` also writes a starter
+`CLAUDE.md` at the root of the source directory. **It only does this when
+there is no `CLAUDE.md` there.** One that already exists explains how you
+actually use the directory, so it wins and is never touched.
 
 ## The device name in claude.ai
 

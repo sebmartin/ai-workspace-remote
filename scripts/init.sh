@@ -182,6 +182,36 @@ else
        "If the service sits there doing nothing, run \`make login\` once."
 fi
 
+# Claude confines the file tools to the working directory, which is /workspace,
+# so /src would be refused without this. A setting rather than --add-dir on the
+# command line: this applies to every session, including the ones
+# remote-control spawns, and leaves the command in compose alone.
+#
+# The key only takes effect once the folder is trusted, which is what
+# hasTrustDialogAccepted above does.
+SETTINGS="${AIWR_ROOT}/home/settings.json"
+if command -v jq >/dev/null 2>&1; then
+  [ -s "${SETTINGS}" ] || printf '{}\n' > "${SETTINGS}"
+  tmp="$(mktemp "${SETTINGS}.XXXXXX")"
+  if jq '.permissions.additionalDirectories =
+           ((.permissions.additionalDirectories // []) + ["/src"] | unique)' \
+       "${SETTINGS}" > "${tmp}" 2>/dev/null; then
+    if cmp -s "${tmp}" "${SETTINGS}"; then
+      rm -f "${tmp}"
+      ok "/src is in permissions.additionalDirectories"
+    else
+      mv "${tmp}" "${SETTINGS}"
+      did "added /src to permissions.additionalDirectories in home/settings.json"
+    fi
+  else
+    rm -f "${tmp}"; note "could not read ${SETTINGS}, leaving it alone." \
+      "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
+  fi
+else
+  note "jq is not installed, so ${SETTINGS} was left as it is." \
+       "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
+fi
+
 if [ ! -d "${AIWR_ROOT}/workspace/.git" ]; then
   if [ -n "$(ls -A "${AIWR_ROOT}/workspace" 2>/dev/null)" ]; then
     die "${AIWR_ROOT}/workspace has files in it but is not a git repository." \
@@ -308,6 +338,29 @@ else
     || die "Cannot create ${SRC_DIR}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
 fi
 ok "source repositories, mounted at /src"
+
+# Nothing otherwise says what this directory is, and an agent whose working
+# directory is /workspace has no reason to guess. Written only when absent: an
+# existing one is either yours or from a previous run, and in both cases it
+# knows more about how the directory is used than this script does.
+if [ ! -e "${SRC_DIR}/CLAUDE.md" ]; then
+  cat > "${SRC_DIR}/CLAUDE.md" <<'MD'
+# /src
+
+Source repositories, for coding work. Clone them here, one directory each.
+
+This is not the workspace. `/workspace` holds the markdown threads this
+machine exists to keep, and it is snapshotted hourly and shared over SMB.
+`/src` is neither of those things, and **nothing backs it up**: a repository
+here exists only on this machine until its commits are pushed. So push.
+
+Replace this file with whatever is actually useful. It was written by
+ai-workspace-remote's `make init` because the directory was otherwise
+unexplained, and nothing will overwrite it.
+MD
+  did "wrote a starter CLAUDE.md in the source directory"
+fi
+
 note "/src is not backed up. Push your work, or it only exists on this machine."
 
 echo
