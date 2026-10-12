@@ -79,10 +79,13 @@ ask AIWR_ROOT \
   /srv/ai-workspace
 ask BACKUP_MOUNT \
   "BACKUP_MOUNT is where the backup goes: a directory on storage you have already mounted. A NAS share, a second disk, a USB enclosure. Mount it first, because an unmounted path is an empty directory and the backup would fill this machine's disk instead."
+ask SRC_MOUNT \
+  "SRC_MOUNT is where your source repositories live, mounted at /src for coding work. It is kept out of the workspace because these are git repositories with their own remotes, which also means it is not backed up." \
+  /srv/src
 
 # Also normalise values that were already in .env, whether hand-edited or
 # written before this ran.
-for key in AIWR_ROOT BACKUP_MOUNT; do
+for key in AIWR_ROOT BACKUP_MOUNT SRC_MOUNT; do
   raw="$(get "${key}")"
   trimmed="$(trim_slashes "${raw}")"
   [ -z "${trimmed}" ] && die "${key} is set to ${raw}, which is not a usable path."
@@ -91,6 +94,7 @@ done
 
 AIWR_ROOT="$(get AIWR_ROOT)"
 BACKUP_MOUNT="$(get BACKUP_MOUNT)"
+SRC_MOUNT="$(get SRC_MOUNT)"
 
 for stale in NAS_HOST NAS_USER NAS_ROOT NAS_PORT; do
   [ -n "$(get "${stale}")" ] && note "${stale} is no longer used and is ignored. Delete it when you like."
@@ -122,22 +126,6 @@ sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
-
-# Mounted at /src for coding work. Only created when SRC_MOUNT is unset and
-# the compose default under AIWR_ROOT applies; a path the user named is theirs
-# to create, and silently making a directory at a typo would hide the typo.
-SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
-if [ -z "${SRC_MOUNT}" ]; then
-  sudo mkdir -p "${AIWR_ROOT}/src"
-  sudo chown "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}/src"
-  ok "src/ for source repositories, mounted at /src"
-elif [ -d "${SRC_MOUNT}" ]; then
-  ok "SRC_MOUNT=${SRC_MOUNT}, mounted at /src"
-else
-  die "SRC_MOUNT is set to ${SRC_MOUNT}, which does not exist." \
-      "Create it, or clear SRC_MOUNT in .env to use ${AIWR_ROOT}/src instead."
-fi
-note "/src is not backed up. Push your work, or it only exists on this machine."
 
 [ -d "${AIWR_ROOT}/backup" ] \
   && note "${AIWR_ROOT}/backup is left over from the old layout and is no longer used. It may still be your only backup, so check the new one before deleting it."
@@ -298,6 +286,17 @@ did "wrote ${BACKUP_MOUNT}/README.md"
 # its absence as "the storage is not mounted" and refuse to write.
 touch "${BACKUP_MOUNT}/.aiwr-backup"
 ok "backup storage ready and marked"
+
+echo
+echo "Setting up ${SRC_MOUNT}"
+
+# No sudo, for the same reason BACKUP_MOUNT uses none: it has to be writable
+# by the uid the container runs as, which is the uid running this, and
+# creating it is the check that it is.
+mkdir -p "${SRC_MOUNT}" 2>/dev/null \
+  || die "Cannot create ${SRC_MOUNT}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
+ok "source repositories, mounted at /src"
+note "/src is not backed up. Push your work, or it only exists on this machine."
 
 echo
 echo "Ready. Review .env if you want to change anything, then:"

@@ -13,6 +13,9 @@
 # under AIWR_ROOT would pull them into the workspace snapshot and the SMB
 # share, duplicating version control they already have. It is mounted only
 # into claude-remote, and nothing backs it up yet.
+#
+# All three mounts are required. A default for any of them would be this repo
+# guessing where someone else's files belong.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -41,17 +44,16 @@ services:
     stdin_open: true
 
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
       # One directory, via CLAUDE_CONFIG_DIR below. Not $HOME: mounting over
       # the home would hide /home/claude/.local, where Claude and uv are
       # installed. Not two separate mounts either, because .claude.json is
       # rewritten by rename and a single-file bind mount cannot be replaced,
       # so anything Claude recorded there was silently lost on restart.
-      - ${AIWR_ROOT:?}/home:/config
-      # Source repositories to do coding work in. Defaults to a directory
-      # under AIWR_ROOT only so the stack still comes up when SRC_MOUNT is
-      # unset; a real deployment points it at wherever the code lives.
-      - ${SRC_MOUNT:-${AIWR_ROOT:?}/src}:/src
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/config
+      # Source repositories to do coding work in. Required, like the other
+      # mounts: where the code lives is not something this repo can guess.
+      - ${SRC_MOUNT:?SRC_MOUNT is not set. It is where your source repositories live, mounted at /src. Run `make init`, which asks for it. New in this version, so an older .env will not have it.}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
@@ -85,7 +87,7 @@ services:
     ports:
       - "${SMB_BIND_IP:-0.0.0.0}:445:445"
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
     # Rebuilt from the environment every boot, so no stale credential file.
     tmpfs:
       - /var/lib/samba
@@ -108,11 +110,11 @@ services:
     user: "${WORKSPACE_UID:-1000}:${WORKSPACE_GID:-1000}"
     stop_grace_period: 60s
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
-      - ${BACKUP_MOUNT:?}:/backup
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
+      - ${BACKUP_MOUNT:?BACKUP_MOUNT is not set. Run `make init`, which asks for it and prepares the storage.}:/backup
       # Only .claude, not the whole home, so .claude.json is not merely
       # excluded from the transcript filter but absent from this container.
-      - ${AIWR_ROOT:?}/home:/claude-home:ro
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/claude-home:ro
     tmpfs:
       - /tmp:mode=1777
     environment:

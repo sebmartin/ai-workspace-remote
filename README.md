@@ -112,13 +112,20 @@ is idempotent, so run it again any time to re-check a setup.
 
 ### What it asks for
 
-Two things, because everything else in `.env` has a working default. Where does
-everything live, and where does the backup go.
+Three things, because everything else in `.env` has a working default. Where
+everything lives, where the backup goes, and where your code is.
 
 | variable | what it is |
 |---|---|
 | `AIWR_ROOT` | one directory holding everything this stack owns |
 | `BACKUP_MOUNT` | a directory on storage the OS has already mounted |
+| `SRC_MOUNT` | a directory of source repositories, mounted at `/src` |
+
+All three are required and none has a default. A default would be this repo
+guessing where someone else's files belong, and getting it wrong quietly. If
+one is missing, `make up` and `make rebuild` both stop before doing anything
+and name it. They name one at a time, so fixing one can reveal the next, and
+`make init` asks for all of them in one pass.
 
 Everything else in `.env` has a working default and can be left alone.
 `WORKSPACE_UID` and `WORKSPACE_GID` are written by `make init` from whoever
@@ -136,7 +143,8 @@ $AIWR_ROOT/
 workspace it would be committed, shared over SMB and copied to the backup.
 
 The backup is not under that root. It lives on `BACKUP_MOUNT`, which holds a
-bare `workspace.git` and a `claude-home` directory.
+bare `workspace.git` and a `claude-home` directory. Source code is not under
+it either, and lives on `SRC_MOUNT`.
 
 One root also means one value to change to stand up a second, fully isolated
 stack, which is how to try this out without pointing anything at a workspace
@@ -146,8 +154,8 @@ real one cannot run at the same time.
 ### What init does
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
-tree, sets ownership and mode, creates the source directory if `SRC_MOUNT` is
-unset, makes `workspace/` a git repo if it is empty,
+tree, sets ownership and mode, creates `SRC_MOUNT`, makes `workspace/` a git
+repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -321,10 +329,11 @@ prefer the settings above for anything you would want back after a rebuild.
 ## Source code, for coding work
 
 `SRC_MOUNT` is a host directory mounted read-write at `/src`, where Claude can
-check out repositories and work on them.
+check out repositories and work on them. It is required, like the other two
+mounts, and `make init` asks for it.
 
 ```bash
-SRC_MOUNT=/home/you/code        # empty to use a src/ directory under AIWR_ROOT
+SRC_MOUNT=/srv/src
 ```
 
 It is deliberately not part of the workspace. These are git repositories with
@@ -556,7 +565,15 @@ make check       # validate the compose file and the shell scripts
 ```
 
 `make up` builds anything stale and starts the stack, so it is also how you
-apply a change to a Dockerfile or an entrypoint.
+apply a change to a Dockerfile or an entrypoint. `make restart` does not,
+because the entrypoint is copied into the image rather than read from disk.
+
+### After pulling a new version
+
+Run `make init` before `make up`. It is idempotent, and it is what fills in
+any setting the new version requires that your `.env` predates. If you skip
+it and something is missing, `make up` stops and names the variable rather
+than starting a half-configured stack.
 
 Use `docker compose exec`, never `docker attach`. Attaching to a `tty: true`
 container running the remote-control server drops you into its stdio, and a
