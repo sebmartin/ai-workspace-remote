@@ -53,7 +53,7 @@ services:
       - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/config
       # Source repositories to do coding work in. Required, like the other
       # mounts: where the code lives is not something this repo can guess.
-      - ${SRC_MOUNT:?SRC_MOUNT is not set. It is where your source repositories live, mounted at /src. Run `make init`, which asks for it. New in this version, so an older .env will not have it.}:/src
+      - ${SRC_MOUNT:?SRC_MOUNT is not set. It is where your source repositories live, mounted at /src. Run `make init`, which asks for it.}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
