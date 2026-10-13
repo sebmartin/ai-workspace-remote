@@ -228,9 +228,17 @@ One setting, space separated. Empty means none, because which plugins a
 workspace wants is a deployment's choice rather than this repo's.
 
 ```bash
-CLAUDE_PLUGINS=superpowers@anthropics/claude-plugins-official
-               ai-workspace@sebmartin/ai-workspace-plugin#release/3
-               /src/my-plugin
+CLAUDE_PLUGINS=superpowers@anthropics/claude-plugins-official ai-workspace@sebmartin/ai-workspace-plugin#release/3 /src/my-plugin
+```
+
+That gets long, and `.env` has no line continuation: a bare wrap or a trailing
+backslash both fail with `unexpected character "@" in variable name`. Double
+quotes spanning lines do work, and are easier to read:
+
+```bash
+CLAUDE_PLUGINS="superpowers@anthropics/claude-plugins-official
+                ai-workspace@sebmartin/ai-workspace-plugin#release/3
+                /src/my-plugin"
 ```
 
 Three kinds of entry, told apart by shape:
