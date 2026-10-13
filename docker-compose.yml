@@ -10,10 +10,9 @@
 #
 #   ${SRC_MOUNT}            source repositories, mounted at /src
 #
-# SRC_MOUNT defaults to src/ under AIWR_ROOT and is only set when the code
-# lives somewhere else. Either way it is a sibling of workspace/ rather than
-# inside it, so it is not in the snapshot and not in the SMB share: both of
-# those mount ${AIWR_ROOT}/workspace specifically. Nothing backs it up.
+# SRC_MOUNT defaults to src/ under AIWR_ROOT. Either way it is a sibling of
+# workspace/ rather than inside it, so the snapshot and the SMB share do not
+# see it: both mount ${AIWR_ROOT}/workspace specifically. Nothing backs it up.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -49,9 +48,6 @@ services:
       # rewritten by rename and a single-file bind mount cannot be replaced,
       # so anything Claude recorded there was silently lost on restart.
       - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/config
-      # Source repositories to do coding work in. Defaults to src/ under
-      # AIWR_ROOT, which is a fine place for it, so a deployment only sets
-      # SRC_MOUNT when the code lives somewhere else.
       - ${SRC_MOUNT:-${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/src}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
@@ -70,18 +66,13 @@ services:
       PLUGIN_NAME: ${PLUGIN_NAME:-}
       PLUGIN_REPO: ${PLUGIN_REPO:-}
       PLUGIN_REF: ${PLUGIN_REF:-}
-      # Which plugins this deployment preloads. No defaults: which plugins a
-      # workspace wants is the deployment's choice, not this repo's, so unset
-      # means none. .env.example shows the ones worth considering.
+      # Unset means none. .env.example shows the ones worth considering.
       CLAUDE_MARKETPLACES: ${CLAUDE_MARKETPLACES:-}
       CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
       CLAUDE_PLUGIN_PATHS: ${CLAUDE_PLUGIN_PATHS:-}
 
-    # A GitHub token for gh and for git push, so the agent can clone, branch
-    # and open pull requests. Mounted as a file rather than set here, so it
-    # stays out of `docker inspect`; the entrypoint reads it into GH_TOKEN,
-    # which is what gh and the git credential helper both use. The file is
-    # always present and may be empty, which means no GitHub access.
+    # A file rather than an environment entry here, so it stays out of
+    # `docker inspect`. The entrypoint reads it into GH_TOKEN.
     secrets:
       - github_token
 

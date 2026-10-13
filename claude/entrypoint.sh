@@ -32,8 +32,7 @@ fi
 # Not fatal: a failure here should not stop the workspace from coming up.
 claude update </dev/null || echo "WARNING: could not check for claude updates"
 
-# Inside the config directory so they persist with everything else. ~/.claude
-# is not mounted any more, so a marketplace there would vanish on a recreate
+# ~/.claude is not mounted, so a marketplace there would vanish on a recreate
 # while the registration pointing at it survived.
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
@@ -41,12 +40,7 @@ INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
 MARKET=aiwr
 MARKET_DIR="$CONFIG_DIR/aiwr-marketplace"
 
-# gh reads GH_TOKEN from the environment and needs no `gh auth login`, so
-# nothing is stored and there is no sign-in step. The image already pointed
-# git's credential helper at gh, so this is what lets git push too.
-#
-# Exported only when there is something to export: an empty file means this
-# deployment has no GitHub access, which is a valid way to run.
+# An empty file is valid and means no GitHub access.
 GH_TOKEN_FILE=/run/secrets/github_token
 if [ -s "$GH_TOKEN_FILE" ]; then
   GH_TOKEN="$(tr -d '\r\n' < "$GH_TOKEN_FILE")"
@@ -59,9 +53,6 @@ fi
 PLUGIN_NAME="${PLUGIN_NAME:-ai-workspace}"
 PLUGIN_REPO="${PLUGIN_REPO:-sebmartin/ai-workspace-plugin}"
 
-# The GitHub path for the workspace plugin, kept for deployments that have no
-# checkout under /src. PLUGIN_REPO=none turns it off, which is what a
-# deployment installing that plugin from CLAUDE_PLUGIN_PATHS instead wants.
 if [ "$PLUGIN_REPO" = none ]; then
   echo "plugin: PLUGIN_REPO=none, skipping the GitHub install of $PLUGIN_NAME"
 else
@@ -119,13 +110,9 @@ fi
 
 # ---- plugins in development, from paths under /src ------------------------
 #
-# A plugin being worked on is not in any marketplace, so we generate one naming
-# each path. Two constraints found by testing, neither of them documented: a
-# plugin entry's `source` must be a relative path starting with "./", and it
-# must resolve inside the marketplace directory. An absolute path is refused
-# outright, and so is "./../x". So each path is symlinked in and named by the
-# link. Symlinks are accepted here because this marketplace is a local
-# directory rather than one Claude fetched.
+# A plugin entry's `source` must be relative and must resolve inside the
+# marketplace directory, so each path is symlinked in and named by the link.
+# Neither constraint is documented; an absolute path and "./../x" are refused.
 DEV_MARKET=aiwr-dev
 DEV_MARKET_DIR="$CONFIG_DIR/aiwr-dev-marketplace"
 
@@ -148,8 +135,7 @@ for path in ${CLAUDE_PLUGIN_PATHS:-}; do
   dev_ids="$dev_ids $name@$DEV_MARKET"
 done
 
-# Rebuilt rather than updated, so a path removed from the list leaves no stale
-# symlink behind pointing at a plugin nobody asked for any more.
+# Rebuilt, so a dropped path leaves no stale symlink.
 rm -rf "$DEV_MARKET_DIR"
 if [ "$dev_entries" != "[]" ]; then
   mkdir -p "$DEV_MARKET_DIR/.claude-plugin"
@@ -164,8 +150,7 @@ if [ "$dev_entries" != "[]" ]; then
   claude plugin marketplace update "$DEV_MARKET" </dev/null
 fi
 
-# Anything installed from here on a previous boot that is no longer asked for.
-# Left alone it would keep loading, and its path under /src may well be gone.
+# Dropped from the list, so uninstall it: its path under /src may be gone.
 for id in $(jq -r --arg m "@$DEV_MARKET" \
               '.plugins | keys[] | select(endswith($m))' "$INSTALLED" 2>/dev/null); do
   case " $dev_ids " in
@@ -175,12 +160,9 @@ for id in $(jq -r --arg m "@$DEV_MARKET" \
   esac
 done
 
-# Always a reinstall, never an update. `plugin install` copies the directory to
-# cache/<marketplace>/<plugin>/<version>/ and `plugin update` is keyed on the
-# version in plugin.json, so a plugin edited without a version bump reports
-# "already at the latest version" and keeps serving the old copy. A local
-# directory copy is cheap, so taking whatever is on disk every boot is both
-# simpler and more predictable than trying to detect the change.
+# Reinstall, never update: install copies the directory and `plugin update` is
+# keyed on the version in plugin.json, so an edit without a version bump keeps
+# serving the old copy.
 for id in $dev_ids; do
   claude plugin uninstall "$id" </dev/null >/dev/null 2>&1 || true
   claude plugin install "$id" --scope user </dev/null \
@@ -188,18 +170,14 @@ for id in $dev_ids; do
 done
 
 # ---- published plugins, from their own marketplaces -----------------------
-#
-# Nothing is generated here and no ref is pinned: these are released plugins,
-# their versions bump, so `plugin update` does the right thing on its own.
 for source in ${CLAUDE_MARKETPLACES:-}; do
   claude plugin marketplace add "$source" </dev/null \
     || { echo "WARNING: could not add marketplace $source"; continue; }
 done
 
-# Updated in a second pass, because `marketplace add` takes a source while
-# `marketplace update` takes the name from the manifest, and the two are only
-# the same string by coincidence. With no name it updates every registered
-# marketplace, which sidesteps working out which name a source resolved to.
+# `add` takes a source, `update` takes the manifest's name, and the two need
+# not match. With no name it updates all of them, so we need not map one to the
+# other.
 claude plugin marketplace update </dev/null \
   || echo "WARNING: could not refresh the marketplaces"
 

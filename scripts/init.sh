@@ -92,14 +92,11 @@ done
 AIWR_ROOT="$(get AIWR_ROOT)"
 BACKUP_MOUNT="$(get BACKUP_MOUNT)"
 
-# Empty is the normal case and means src/ under AIWR_ROOT, which is what
-# compose falls back to.
+# Empty means src/ under AIWR_ROOT, which is what compose falls back to.
 SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
 [ -n "${SRC_MOUNT}" ] && set_key SRC_MOUNT "${SRC_MOUNT}"
 SRC_DIR="${SRC_MOUNT:-${AIWR_ROOT}/src}"
 
-# Reported here with the other two, because it is the one path nothing asked
-# about, which makes it the one most worth confirming on screen.
 if [ -n "${SRC_MOUNT}" ]; then
   ok "SRC_MOUNT=${SRC_MOUNT}"
 else
@@ -134,9 +131,8 @@ fi
 
 sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chown "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
-# Only workspace/ and home/, not the whole root. src/ can sit here too, and
-# recursing into source repositories every run would be a slow walk over
-# build output for no reason, and would flatten any ownership set inside them.
+# Not the whole root: src/ can sit here, and recursing into source
+# repositories would flatten any ownership set inside them.
 sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
@@ -190,12 +186,9 @@ else
        "If the service sits there doing nothing, run \`make login\` once."
 fi
 
-# Claude confines the file tools to the working directory, which is /workspace,
-# so /src would be refused without this. A setting rather than --add-dir on the
-# command line: this applies to every session, including the ones
-# remote-control spawns, and leaves the command in compose alone.
-#
-# The key only takes effect once the folder is trusted, which is what
+# The file tools are confined to the working directory, so /src is refused
+# without this. A setting rather than --add-dir, so it covers the sessions
+# remote-control spawns. Takes effect only once the folder is trusted, which
 # hasTrustDialogAccepted above does.
 SETTINGS="${AIWR_ROOT}/home/settings.json"
 if command -v jq >/dev/null 2>&1; then
@@ -272,9 +265,7 @@ if [ ! -s secrets/smb_password ]; then
 fi
 ok "SMB user 'claude', password in secrets/smb_password"
 
-# Optional, and the file is created either way: compose mounts it as a secret
-# and a missing file would stop the stack, while an empty one just means this
-# deployment has no GitHub access.
+# Created either way: compose mounts it, so a missing file stops the stack.
 if [ ! -e secrets/github_token ]; then
   gh_tok=""
   if [ -t 0 ]; then
@@ -361,23 +352,19 @@ ok "backup storage ready and marked"
 echo
 echo "Setting up ${SRC_DIR}"
 
-# It has to exist before the stack starts, because Docker creates a missing
-# bind mount source as root and Claude could then not write to it.
+# Docker would otherwise create it as root, leaving Claude unable to write.
 if [ -z "${SRC_MOUNT}" ]; then
   sudo mkdir -p "${SRC_DIR}"
   sudo chown "${UID_NOW}:${GID_NOW}" "${SRC_DIR}"
 else
-  # A path outside the root we own, so no sudo: it has to be writable by the
-  # uid the containers run as, and creating it is the check that it is.
+  # No sudo, so that creating it proves the container's uid can write there.
   mkdir -p "${SRC_DIR}" 2>/dev/null \
     || die "Cannot create ${SRC_DIR}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
 fi
 ok "source repositories, mounted at /src"
 
-# Nothing otherwise says what this directory is, and an agent whose working
-# directory is /workspace has no reason to guess. Written only when absent: an
-# existing one is either yours or from a previous run, and in both cases it
-# knows more about how the directory is used than this script does.
+# Never overwritten: an existing one knows more about how the directory is
+# used than this script does.
 if [ ! -e "${SRC_DIR}/CLAUDE.md" ]; then
   cat > "${SRC_DIR}/CLAUDE.md" <<'MD'
 # /src
@@ -389,9 +376,7 @@ machine exists to keep, and it is snapshotted hourly and shared over SMB.
 `/src` is neither of those things, and **nothing backs it up**: a repository
 here exists only on this machine until its commits are pushed. So push.
 
-Replace this file with whatever is actually useful. It was written by
-ai-workspace-remote's `make init` because the directory was otherwise
-unexplained, and nothing will overwrite it.
+Replace this file with whatever is actually useful. Nothing overwrites it.
 MD
   did "wrote a starter CLAUDE.md in the source directory"
 fi
