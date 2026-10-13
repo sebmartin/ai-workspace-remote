@@ -225,8 +225,11 @@ older than Windows 8, which is where SMB3 and encryption arrived.
 ## Plugins
 
 Which plugins Claude starts with is a setting, not something baked into the
-image. There are three ways in, for three different kinds of plugin, and a
-deployment can use any combination of them.
+image. Two settings cover any plugin, and a deployment can use both.
+
+The workspace plugin is a separate case with its own settings, described under
+[The workspace plugin](#the-workspace-plugin) below. It is the only plugin
+that can be pinned to a git ref.
 
 ### Published plugins
 
@@ -273,18 +276,20 @@ no reason to try to detect the change instead.
 
 A path dropped from the list is uninstalled on the next start.
 
-### Pinning one to a branch
+## The workspace plugin
 
-The third way is for installing a plugin from GitHub at a particular ref, with
-no checkout on the box. Claude installs plugins as `name@marketplace`, only
-from a registered marketplace, never straight from a repo URL, and nothing in
-the CLI takes a git ref. So the container keeps its own single-entry
-marketplace on disk and writes the repo and ref into its manifest. It is
-rebuilt on every start, so switching refs needs no cleanup.
+This stack exists to run the ai-workspace plugin, so that one plugin gets its
+own settings and is installed from GitHub at a ref you choose. Nothing else
+can be pinned this way: `PLUGIN_NAME` and `PLUGIN_REPO` name a single plugin.
 
-The plugin is installed on every start. `PLUGIN_REPO` and `PLUGIN_NAME`
-default to the ai-workspace plugin, so the only thing you normally set is the
-ref:
+Claude installs plugins as `name@marketplace`, only from a registered
+marketplace, never straight from a repo URL, and nothing in the CLI takes a
+git ref. So the container keeps its own single-entry marketplace on disk and
+writes the repo and ref into its manifest. It is rebuilt on every start, so
+switching refs needs no cleanup.
+
+`PLUGIN_REPO` and `PLUGIN_NAME` default to the ai-workspace plugin, so the
+only thing you normally set is the ref:
 
 ```bash
 PLUGIN_REF=my-big-revamp        # branch, tag or sha; empty for the default branch
@@ -316,8 +321,10 @@ does not cost you the plugin.
 
 Clear `PLUGIN_REF` and redeploy to go back to the default branch.
 
-Set `PLUGIN_REPO=none` to turn this path off, which is what you want once the
-same plugin is listed in `CLAUDE_PLUGIN_PATHS` instead.
+Set `PLUGIN_REPO=none` to turn this off, which is what you want once you have
+the plugin checked out under `/src` and listed in `CLAUDE_PLUGIN_PATHS`
+instead. Then it is an ordinary plugin like any other and this section stops
+applying.
 
 Anything else you install by hand inside the container with `claude plugin`
 persists in the mounted config directory, but it is not recorded anywhere, so
