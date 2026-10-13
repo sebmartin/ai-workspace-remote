@@ -335,8 +335,11 @@ stores nothing, so nothing has to persist and nothing survives in `/config`.
 The image points git's credential helper at `gh`, so `git push` uses the same
 token.
 
-Use a fine-grained token limited to the repositories you want, with
-`Contents: read and write` and `Pull requests: read and write`.
+Use a fine-grained token limited to the repositories you want.
+[This link](https://github.com/settings/personal-access-tokens/new?name=ai-workspace-remote&contents=write&pull_requests=write)
+prefills the name and the two permissions it needs, `Contents: write` and
+`Pull requests: write`, leaving you to pick the repositories. `make init`
+prints it too.
 
 **Those permissions also allow merging.** There is no token scope that grants
 "open pull requests but never merge", because merging needs the same two

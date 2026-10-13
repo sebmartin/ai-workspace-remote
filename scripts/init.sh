@@ -272,10 +272,13 @@ if [ ! -e secrets/github_token ]; then
     printf '\nA GitHub token lets the agent clone, push and open pull requests\n'
     printf 'from /src. Leave it blank to skip, and add it later by writing\n'
     printf 'secrets/github_token yourself.\n\n'
-    printf 'Use a fine-grained token, limited to the repositories you want,\n'
-    printf 'with Contents: read and write, and Pull requests: read and write.\n'
-    printf 'Note that those permissions also allow merging, so protect any\n'
-    printf 'branch you do not want merged without a review.\n'
+    # The permissions and a name are prefilled from the query string, so the
+    # only thing left to pick is which repositories it covers.
+    printf 'Generate one here, then pick the repositories it covers:\n'
+    printf '  https://github.com/settings/personal-access-tokens/new'
+    printf '?name=ai-workspace-remote&contents=write&pull_requests=write\n\n'
+    printf 'Those permissions also allow merging. Protect any branch you do not\n'
+    printf 'want merged without a review.\n'
     read -r -s -p "GitHub token (blank to skip): " gh_tok
     printf '\n'
   fi
