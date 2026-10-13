@@ -52,7 +52,7 @@ smb: ## Print the SMB address, user and password
 	printf '  user      claude\n'; \
 	printf '  password  %s\n\n' "$$pw"
 
-plugins: ## Show which plugin and ref is actually live
+plugins: ## Show which plugins and versions are actually live
 	docker compose exec claude-remote claude plugin list --json | jq '[.[] | {id, version, enabled}]'
 
 backup-now: ## Run a snapshot and a transcript copy immediately

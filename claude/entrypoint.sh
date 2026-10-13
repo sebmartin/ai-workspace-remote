@@ -40,153 +40,142 @@ INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
 MARKET=aiwr
 MARKET_DIR="$CONFIG_DIR/aiwr-marketplace"
 
-# An empty file is valid and means no GitHub access.
-GH_TOKEN_FILE=/run/secrets/github_token
-if [ -s "$GH_TOKEN_FILE" ]; then
-  GH_TOKEN="$(tr -d '\r\n' < "$GH_TOKEN_FILE")"
-  export GH_TOKEN
-  echo "github: GH_TOKEN loaded from the mounted secret"
-else
-  echo "github: no token, so gh and git push will not be authenticated"
-fi
+# One list, three kinds of entry:
+#
+#   /src/my-plugin                      a directory you are working in
+#   name@owner/repo#ref                 a plugin repo, tracked at that ref
+#   name@source                         a marketplace, installed by version
+#
+# The first two are not in any marketplace, so we generate one naming them.
+# A plugin entry's `source` must be relative and must resolve inside the
+# marketplace directory, so a directory is symlinked in and named by the link.
+# Neither constraint is documented; an absolute path and "./../x" are refused.
+rm -rf "$MARKET_DIR"
+entries="[]"
+want=""
+refs=""
+dirs=""
 
-PLUGIN_NAME="${PLUGIN_NAME:-ai-workspace}"
-PLUGIN_REPO="${PLUGIN_REPO:-sebmartin/ai-workspace-plugin}"
-
-if [ "$PLUGIN_REPO" = none ]; then
-  echo "plugin: PLUGIN_REPO=none, skipping the GitHub install of $PLUGIN_NAME"
-else
-  mkdir -p "$MARKET_DIR/.claude-plugin"
-  # `ref` is cloned with --branch and cannot take a commit. Commits go in `sha`,
-  # a separate field wanting 40 lowercase hex.
-  jq -n --arg m "$MARKET" --arg p "$PLUGIN_NAME" \
-        --arg r "$PLUGIN_REPO" --arg f "${PLUGIN_REF:-}" \
-    '{name: $m, owner: {name: "ai-workspace-remote"},
-      plugins: [{
-        name: $p,
-        source: ({source: "github", repo: $r}
+for entry in ${CLAUDE_PLUGINS:-}; do
+  case "$entry" in
+    /*)
+      manifest="$entry/.claude-plugin/plugin.json"
+      name="$(jq -r '.name // ""' "$manifest" 2>/dev/null)"
+      if [ -z "$name" ]; then
+        echo "WARNING: $entry has no readable .claude-plugin/plugin.json, skipping it"
+        continue
+      fi
+      mkdir -p "$MARKET_DIR/.claude-plugin"
+      ln -sfn "$entry" "$MARKET_DIR/$name"
+      entries="$(printf '%s' "$entries" | jq --arg n "$name" \
+        '. + [{name: $n, source: ("./" + $n)}]')"
+      want="$want $name@$MARKET"
+      dirs="$dirs $name@$MARKET"
+      ;;
+    *\#*)
+      name="${entry%%@*}"
+      rest="${entry#*@}"
+      repo="${rest%%\#*}"
+      ref="${rest#*\#}"
+      [ "$ref" = HEAD ] && ref=""
+      # `ref` is cloned with --branch and cannot take a commit. Commits go in
+      # `sha`, a separate field wanting 40 lowercase hex.
+      mkdir -p "$MARKET_DIR/.claude-plugin"
+      entries="$(printf '%s' "$entries" \
+        | jq --arg n "$name" --arg r "$repo" --arg f "$ref" \
+          '. + [{name: $n, source: ({source: "github", repo: $r}
                  + (if $f == "" then {}
                     elif ($f | test("^[0-9a-fA-F]{40}$")) then {sha: ($f | ascii_downcase)}
-                    else {ref: $f} end))
-      }]}' > "$MARKET_DIR/.claude-plugin/marketplace.json"
-
-  # A short commit would be sent as a branch name and fail confusingly.
-  case "${PLUGIN_REF:-}" in
-    [0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]*)
-      if [ "${#PLUGIN_REF}" -ne 40 ] && printf '%s' "$PLUGIN_REF" | grep -qE '^[0-9a-fA-F]+$'; then
-        echo "WARNING: PLUGIN_REF looks like a shortened commit. Use the full 40 characters."
-      fi ;;
+                    else {ref: $f} end))}]')"
+      want="$want $name@$MARKET"
+      refs="$refs $name@$MARKET=$repo=$ref"
+      ;;
+    *@*)
+      source="${entry#*@}"
+      name="${entry%%@*}"
+      # A repo, URL or path all contain a slash. A bare name is one that is
+      # already registered, so it is used as it is.
+      case "$source" in
+        */*)
+          claude plugin marketplace add "$source" </dev/null \
+            || { echo "WARNING: could not add marketplace $source"; continue; }
+          # The marketplace's name comes from its own manifest, not its path,
+          # so read back what the add recorded against this source.
+          market="$(jq -r --arg s "$source" \
+            'to_entries[] | select(.value.source.repo == $s
+                                or .value.source.path == $s
+                                or .value.source.url  == $s) | .key' \
+            "$CONFIG_DIR/plugins/known_marketplaces.json" 2>/dev/null | head -1)"
+          if [ -z "$market" ]; then
+            echo "WARNING: added $source but could not work out its marketplace name, skipping $name"
+            continue
+          fi ;;
+        *) market="$source" ;;
+      esac
+      want="$want $name@$market"
+      ;;
+    *)
+      echo "WARNING: $entry is not a path, name@source or name@repo#ref, skipping it" ;;
   esac
-
-  # `marketplace add` does not re-read a manifest it already knows, and
-  # `plugin install` is a no-op once the plugin exists, so both are needed.
-  claude plugin marketplace add "$MARKET_DIR" </dev/null
-  claude plugin marketplace update "$MARKET" </dev/null
-
-  # `plugin update` is keyed on the version in plugin.json, so a branch that
-  # moved without a version bump reports "already at the latest version". Only a
-  # reinstall re-resolves the ref, so compare commits and reinstall on a
-  # mismatch. Unresolvable means keep what is installed.
-  if printf '%s' "${PLUGIN_REF:-}" | grep -qE '^[0-9a-fA-F]{40}$'; then
-    want="$(printf '%s' "$PLUGIN_REF" | tr 'A-F' 'a-f')"
-  else
-    want="$(git ls-remote "https://github.com/${PLUGIN_REPO}" "${PLUGIN_REF:-HEAD}" 2>/dev/null \
-            | awk 'NR==1 {print $1}')"
-  fi
-  have="$(jq -r --arg id "$PLUGIN_NAME@$MARKET" \
-            '.plugins[$id][0].gitCommitSha // ""' "$INSTALLED" 2>/dev/null || true)"
-
-  if [ -z "$want" ]; then
-    echo "WARNING: could not resolve ${PLUGIN_REF:-the default branch}, keeping the installed copy"
-  elif [ -n "$have" ] && [ "$want" != "$have" ]; then
-    echo "plugin: ${have:0:7} -> ${want:0:7}, reinstalling"
-    claude plugin uninstall "$PLUGIN_NAME@$MARKET" </dev/null >/dev/null 2>&1 || true
-  fi
-
-  claude plugin install "$PLUGIN_NAME@$MARKET" --scope user </dev/null
-  claude plugin update "$PLUGIN_NAME@$MARKET" </dev/null \
-    || echo "WARNING: $PLUGIN_NAME may not be at ${PLUGIN_REF:-its default branch}"
-fi
-
-# ---- plugins in development, from paths under /src ------------------------
-#
-# A plugin entry's `source` must be relative and must resolve inside the
-# marketplace directory, so each path is symlinked in and named by the link.
-# Neither constraint is documented; an absolute path and "./../x" are refused.
-DEV_MARKET=aiwr-dev
-DEV_MARKET_DIR="$CONFIG_DIR/aiwr-dev-marketplace"
-
-dev_ids=""
-dev_entries="[]"
-
-for path in ${CLAUDE_PLUGIN_PATHS:-}; do
-  manifest="$path/.claude-plugin/plugin.json"
-  if [ ! -f "$manifest" ]; then
-    echo "WARNING: $path has no .claude-plugin/plugin.json, skipping it"
-    continue
-  fi
-  name="$(jq -r '.name // ""' "$manifest" 2>/dev/null)"
-  if [ -z "$name" ]; then
-    echo "WARNING: $manifest declares no name, skipping $path"
-    continue
-  fi
-  dev_entries="$(printf '%s' "$dev_entries" \
-    | jq --arg n "$name" '. + [{name: $n, source: ("./" + $n)}]')"
-  dev_ids="$dev_ids $name@$DEV_MARKET"
 done
 
-# Rebuilt, so a dropped path leaves no stale symlink.
-rm -rf "$DEV_MARKET_DIR"
-if [ "$dev_entries" != "[]" ]; then
-  mkdir -p "$DEV_MARKET_DIR/.claude-plugin"
-  for path in ${CLAUDE_PLUGIN_PATHS:-}; do
-    name="$(jq -r '.name // ""' "$path/.claude-plugin/plugin.json" 2>/dev/null)"
-    [ -n "$name" ] && ln -sfn "$path" "$DEV_MARKET_DIR/$name"
-  done
-  jq -n --arg m "$DEV_MARKET" --argjson ps "$dev_entries" \
+if [ "$entries" != "[]" ]; then
+  jq -n --arg m "$MARKET" --argjson ps "$entries" \
     '{name: $m, owner: {name: "ai-workspace-remote"}, plugins: $ps}' \
-    > "$DEV_MARKET_DIR/.claude-plugin/marketplace.json"
-  claude plugin marketplace add "$DEV_MARKET_DIR" </dev/null
-  claude plugin marketplace update "$DEV_MARKET" </dev/null
+    > "$MARKET_DIR/.claude-plugin/marketplace.json"
+  claude plugin marketplace add "$MARKET_DIR" </dev/null
+else
+  # Its directory is gone, so a registration left behind would fail every
+  # update from here on.
+  claude plugin marketplace remove "$MARKET" </dev/null >/dev/null 2>&1 || true
 fi
+claude plugin marketplace update </dev/null \
+  || echo "WARNING: could not refresh the marketplaces"
 
-# Dropped from the list, so uninstall it: its path under /src may be gone.
-for id in $(jq -r --arg m "@$DEV_MARKET" \
+# Dropped from the list, so uninstall it: a directory under /src may be gone.
+for id in $(jq -r --arg m "@$MARKET" \
               '.plugins | keys[] | select(endswith($m))' "$INSTALLED" 2>/dev/null); do
-  case " $dev_ids " in
+  case " $want " in
     *" $id "*) ;;
     *) echo "plugin: $id is no longer listed, uninstalling"
        claude plugin uninstall "$id" </dev/null >/dev/null 2>&1 || true ;;
   esac
 done
 
-# Reinstall, never update: install copies the directory and `plugin update` is
-# keyed on the version in plugin.json, so an edit without a version bump keeps
-# serving the old copy.
-for id in $dev_ids; do
-  claude plugin uninstall "$id" </dev/null >/dev/null 2>&1 || true
-  claude plugin install "$id" --scope user </dev/null \
-    || echo "WARNING: could not install $id"
+# A ref that moved without a version bump: `plugin update` reports "already at
+# the latest version", so compare commits and reinstall on a mismatch.
+# Unresolvable means keep what is installed.
+for spec in $refs; do
+  id="${spec%%=*}"; rest="${spec#*=}"; repo="${rest%%=*}"; ref="${rest#*=}"
+  if printf '%s' "$ref" | grep -qE '^[0-9a-fA-F]{40}$'; then
+    continue
+  fi
+  if [ "${#ref}" -gt 6 ] && printf '%s' "$ref" | grep -qE '^[0-9a-fA-F]+$'; then
+    echo "WARNING: $id names what looks like a shortened commit. Use the full 40 characters."
+  fi
+  live="$(git ls-remote "https://github.com/${repo}" "${ref:-HEAD}" 2>/dev/null \
+          | awk 'NR==1 {print $1}')"
+  have="$(jq -r --arg id "$id" '.plugins[$id][0].gitCommitSha // ""' "$INSTALLED" 2>/dev/null || true)"
+  if [ -z "$live" ]; then
+    echo "WARNING: could not resolve ${ref:-the default branch} of $repo, keeping the installed copy"
+  elif [ -n "$have" ] && [ "$live" != "$have" ]; then
+    echo "plugin: $id ${have:0:7} -> ${live:0:7}, reinstalling"
+    claude plugin uninstall "$id" </dev/null >/dev/null 2>&1 || true
+  fi
 done
 
-# ---- published plugins, from their own marketplaces -----------------------
-for source in ${CLAUDE_MARKETPLACES:-}; do
-  claude plugin marketplace add "$source" </dev/null \
-    || { echo "WARNING: could not add marketplace $source"; continue; }
-done
-
-# `add` takes a source, `update` takes the manifest's name, and the two need
-# not match. With no name it updates all of them, so we need not map one to the
-# other.
-claude plugin marketplace update </dev/null \
-  || echo "WARNING: could not refresh the marketplaces"
-
-for id in ${CLAUDE_PLUGINS:-}; do
+# A directory is reinstalled every start: install copies it and `plugin update`
+# is keyed on the version in plugin.json, so an edit without a version bump
+# keeps serving the old copy.
+for id in $want; do
+  case " $dirs " in
+    *" $id "*) claude plugin uninstall "$id" </dev/null >/dev/null 2>&1 || true ;;
+  esac
   claude plugin install "$id" --scope user </dev/null \
     || { echo "WARNING: could not install $id"; continue; }
-  claude plugin update "$id" </dev/null \
-    || echo "WARNING: $id may not be at its latest version"
+  claude plugin update "$id" </dev/null >/dev/null 2>&1 || true
 done
+
 
 # Says what is actually live, in `docker logs`.
 claude plugin list

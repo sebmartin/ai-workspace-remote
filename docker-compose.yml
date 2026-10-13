@@ -63,13 +63,8 @@ services:
       # Moves settings.json, plugins/ and .claude.json into one directory we
       # can mount as a directory. Everything Claude persists then survives.
       CLAUDE_CONFIG_DIR: /config
-      PLUGIN_NAME: ${PLUGIN_NAME:-}
-      PLUGIN_REPO: ${PLUGIN_REPO:-}
-      PLUGIN_REF: ${PLUGIN_REF:-}
       # Unset means none. .env.example shows the ones worth considering.
-      CLAUDE_MARKETPLACES: ${CLAUDE_MARKETPLACES:-}
       CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
-      CLAUDE_PLUGIN_PATHS: ${CLAUDE_PLUGIN_PATHS:-}
 
     # A file rather than an environment entry here, so it stays out of
     # `docker inspect`. The entrypoint reads it into GH_TOKEN.

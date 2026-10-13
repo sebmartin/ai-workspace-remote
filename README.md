@@ -176,7 +176,7 @@ needed the backup. If the file is gone, the jobs refuse to run and say so in
 volume mount, a port, a hostname, a command or an environment variable, and all
 of those are fixed when a container is created. Nothing needs a rebuild.
 `make restart` does neither, which is why it is only for picking up a new
-Claude version or new commits on the same plugin ref.
+Claude version, or new plugin commits on a ref or in `/src`.
 
 **The workspace filesystem needs `user.*` extended attributes.** ext4, xfs and
 btrfs are fine. Samba's `streams_xattr` needs them, so pointing `AIWR_ROOT` at
@@ -224,126 +224,80 @@ older than Windows 8, which is where SMB3 and encryption arrived.
 
 ## Plugins
 
-Which plugins Claude starts with is a setting, not something baked into the
-image. Two settings cover any plugin, and a deployment can use both.
-
-The workspace plugin is a separate case with its own settings, described under
-[The workspace plugin](#the-workspace-plugin) below. It is the only plugin
-that can be pinned to a git ref.
-
-### Published plugins
-
-A plugin that has been released lives in a marketplace and has a version
-number, so nothing has to be pinned. Register the marketplaces, then name the
-plugins:
+One setting, space separated. Empty means none, because which plugins a
+workspace wants is a deployment's choice rather than this repo's.
 
 ```bash
-CLAUDE_MARKETPLACES=anthropics/claude-plugins-official
-CLAUDE_PLUGINS=superpowers@claude-plugins-official plugin-dev@claude-plugins-official
+CLAUDE_PLUGINS=superpowers@anthropics/claude-plugins-official
+               ai-workspace@sebmartin/ai-workspace-plugin#release/3
+               /src/my-plugin
 ```
 
-Both are space-separated. A marketplace source can be a GitHub repo, a URL or
-a path. A plugin id is `name@marketplace`, where the marketplace name comes
-from that marketplace's own manifest, which is usually but not always the last
-part of the repo name. `claude plugin marketplace list` in the container shows
-the names it resolved.
+Three kinds of entry, told apart by shape:
 
-Both are empty unless you set them, because which plugins a workspace wants
-is a deployment's choice rather than this repo's. The pair above is a
-reasonable starting point and is shown commented out in `.env.example`.
-
-### Plugins you are developing
-
-A plugin being worked on is not in any marketplace. Put the checkout under
-`/src` and name its path:
-
-```bash
-CLAUDE_PLUGIN_PATHS=/src/ai-workspace-plugin /src/my-other-plugin
-```
-
-Each path needs a `.claude-plugin/plugin.json`, and the `name` in it is the
-name the plugin is installed under. The container generates a marketplace for
-them, symlinking each path into it, because a marketplace entry's source has
-to be a relative path that stays inside the marketplace directory.
-
-**These are reinstalled from disk on every start, so edits take effect on
-`make restart` rather than on save.** Installing a plugin copies it into the
-config directory under its version number, and `plugin update` only notices a
-bumped version, so a plugin edited without a version bump otherwise reports
-"already at the latest version" and keeps serving the old copy. Reinstalling
-unconditionally sidesteps that. A local directory copy is cheap, so there is
-no reason to try to detect the change instead.
-
-A path dropped from the list is uninstalled on the next start.
-
-## The workspace plugin
-
-This stack exists to run the ai-workspace plugin, so that one plugin has three
-settings of its own. They install **one** named plugin from GitHub at a ref.
-
-| setting | for |
+| entry | source |
 |---|---|
-| `PLUGIN_REF` | which branch, tag or commit to install |
-| `PLUGIN_REPO` | a fork, instead of `sebmartin/ai-workspace-plugin` |
-| `PLUGIN_NAME` | the plugin name in that fork, if it differs |
+| `/src/my-plugin` | a directory you are working in |
+| `name@owner/repo#ref` | a plugin repo at a branch, tag or commit |
+| `name@source` | a marketplace, installed by version |
 
-**What this gives you that the two general settings do not** is tracking a
-moving branch with no checkout on the box: push to the branch, restart, and
-the new commit is live. That is the only reason to use it.
+Then `make up` to recreate, and `make plugins` to confirm what is live.
 
-If you have the plugin checked out under `/src`, or you install a released
-version from a marketplace, use `CLAUDE_PLUGIN_PATHS` or `CLAUDE_PLUGINS`
-instead and set `PLUGIN_REPO=none`. A fork works the same way: clone it into
-`/src`, or list your own marketplace. `PLUGIN_REPO` is only worth setting if
-you want a fork's branch tracked from the remote without cloning it.
+### A directory you are working in
 
-Claude installs plugins as `name@marketplace`, only from a registered
-marketplace, never straight from a repo URL, and nothing in the CLI takes a
-git ref. So the container keeps its own single-entry marketplace on disk and
-writes the repo and ref into its manifest. It is rebuilt on every start, so
-switching refs needs no cleanup.
+A plugin being worked on is not in any marketplace, so the container generates
+one, symlinking each path into it. The path needs a `.claude-plugin/plugin.json`,
+and the `name` in it is the name the plugin is installed under.
 
-`PLUGIN_REPO` and `PLUGIN_NAME` default to the ai-workspace plugin, so the
-only thing you normally set is the ref:
+**Reinstalled from disk on every start, so edits take effect on `make restart`
+rather than on save.** Installing copies the plugin into the config directory
+under its version number, and `plugin update` only notices a bumped version, so
+a plugin edited without a version bump otherwise reports "already at the latest
+version" and keeps serving the old copy.
 
-```bash
-PLUGIN_REF=my-big-revamp        # branch, tag or sha; empty for the default branch
-```
+### A plugin repo at a ref
 
-```bash
-docker compose up -d            # recreate with the new setting
-make plugins                    # confirm what is actually live
-```
+For a plugin that has no marketplace, or one you want pinned. Claude installs
+plugins as `name@marketplace`, only from a registered marketplace, never
+straight from a repo URL, and nothing in the CLI takes a git ref. So the
+container writes the repo and ref into the manifest it generates.
 
-`PLUGIN_REF` takes a branch, a tag, or a full 40 character commit. A short
-commit does not work, and neither does putting a commit where a branch goes:
-they are different fields in the manifest, so the entrypoint looks at the
-value and writes whichever one fits.
+The ref is a branch, a tag, a full 40 character commit, or `HEAD` for the
+default branch. A short commit does not work, and neither does putting a commit
+where a branch goes: they are different fields in the manifest, so the
+entrypoint looks at the value and writes whichever one fits.
 
-On every start the ref is resolved to a commit with `git ls-remote` and
-compared against the commit that is installed. They differ, it reinstalls.
-They match, it does nothing.
+On every start the ref is resolved with `git ls-remote` and compared against
+the commit that is installed. They differ, it reinstalls. They match, it does
+nothing. That comparison is what makes pushing to a branch and restarting pick
+up the new commit, since `plugin update` would otherwise report "already at the
+latest version". If the ref cannot be resolved, nothing is uninstalled and the
+installed copy keeps working, so a network outage at boot does not cost you the
+plugin.
 
-That comparison is what makes pushing to a branch and restarting pick up the
-new commit. Both the install cache and `plugin update` are keyed on the
-version in `plugin.json`, so an updated branch otherwise reports "already at
-the latest version" and keeps serving the old commit.
+This is how the workspace plugin is normally installed, and a fork is the same
+entry with a different repo.
 
-Leaving `PLUGIN_REF` empty resolves the default branch, so it behaves exactly
-as naming that branch does. If the commit cannot be resolved, nothing is
-uninstalled and the installed copy keeps working, so a network outage at boot
-does not cost you the plugin.
+### A marketplace
 
-Clear `PLUGIN_REF` and redeploy to go back to the default branch.
+A released plugin has a version number, so nothing needs pinning. The source is
+a GitHub repo, a URL or a path, and the container registers it before
+installing.
 
-Set `PLUGIN_REPO=none` to turn this off. The plugin then comes from
-`CLAUDE_PLUGIN_PATHS` or `CLAUDE_PLUGINS` like any other, and this section
-stops applying. The cost is that taking new commits becomes `git pull` in
-`/src` then `make restart`, rather than `make restart` alone.
+A marketplace's name comes from its own manifest rather than its path, so the
+entrypoint reads back the name that registering recorded. A bare name with no
+slash, like `superpowers@claude-plugins-official`, is taken as a marketplace
+already registered in the container. `claude plugin marketplace list` shows
+those.
 
-Anything else you install by hand inside the container with `claude plugin`
-persists in the mounted config directory, but it is not recorded anywhere, so
-prefer the settings above for anything you would want back after a rebuild.
+### Removing one
+
+Drop it from the list and restart. Anything the container installed that is no
+longer listed is uninstalled on the next start.
+
+Anything you install by hand inside the container with `claude plugin` persists
+in the mounted config directory, but it is not recorded anywhere, so prefer the
+setting above for anything you would want back after a rebuild.
 
 ## Source code, for coding work
 
@@ -621,7 +575,7 @@ Do this once before relying on it.
 make ps          # container status, plus the backup container's health
 make logs        # follow
 make restart     # restart claude-remote, which is the whole update ritual
-make plugins     # which plugin version and ref is live
+make plugins     # which plugins and versions are live
 make init        # set up, or re-check, everything .env describes
 make backup-now  # force a snapshot and a transcript copy
 make rebuild     # refresh base images and apt packages
