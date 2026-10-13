@@ -37,6 +37,29 @@ claude update </dev/null || echo "WARNING: could not check for claude updates"
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
 
+# An empty file is valid and means no GitHub access.
+GH_TOKEN_FILE=/run/secrets/github_token
+if [ -s "$GH_TOKEN_FILE" ]; then
+  GH_TOKEN="$(tr -d '\r\n' < "$GH_TOKEN_FILE")"
+  export GH_TOKEN
+  # The export reaches this process and its children, but not one started by
+  # `docker compose exec`, which gets the container's configured environment
+  # instead. So log gh in as well, leaving the token in ~/.config/gh where any
+  # process finds it. That home is not mounted, so it is rebuilt from the
+  # secret on every start and never persisted.
+  #
+  # Not fatal: this validates against the API, so it fails when GitHub is
+  # unreachable, and the export still covers the session itself.
+  if printf '%s' "$GH_TOKEN" | gh auth login --with-token >/dev/null 2>&1; then
+    echo "github: authenticated from the mounted secret"
+  else
+    echo "github: GH_TOKEN exported, but gh could not validate it. A session will"
+    echo "        work; a shell opened with docker exec will not."
+  fi
+else
+  echo "github: no token, so gh and git push will not be authenticated"
+fi
+
 MARKET=aiwr
 MARKET_DIR="$CONFIG_DIR/aiwr-marketplace"
 
