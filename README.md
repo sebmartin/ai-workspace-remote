@@ -151,7 +151,8 @@ real one cannot run at the same time.
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
 tree, sets ownership and mode, creates the source directory and grants Claude
-access to it, makes `workspace/` a git repo if it is empty,
+access to it, takes a GitHub token if you have one, makes `workspace/` a git
+repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -340,6 +341,38 @@ all.
 The consequence is the thing to know: **`/src` is not backed up.** Nothing on
 `BACKUP_MOUNT` covers it. Work that has not been pushed exists only on this
 machine, and only until the disk does not. Push branches as you go.
+
+### Working with GitHub
+
+`gh` is in the image, from GitHub's own apt repo rather than Debian's, which
+ships a version from early 2024. With a token the agent can clone, branch,
+push and open pull requests from `/src`.
+
+The token goes in `secrets/github_token`, which `make init` asks for and
+always creates, empty if you skip it. Compose mounts it as a secret, and the
+entrypoint reads it into `GH_TOKEN` only when it is not empty. An empty file
+means this deployment has no GitHub access, which is a valid way to run:
+public clones still work, and only authenticated operations fail.
+
+There is no sign-in step. `gh` reads `GH_TOKEN` from the environment and
+stores nothing, so nothing has to persist and nothing survives in `/config`.
+The image points git's credential helper at `gh`, so `git push` uses the same
+token.
+
+Use a fine-grained token limited to the repositories you want, with
+`Contents: read and write` and `Pull requests: read and write`.
+
+**Those permissions also allow merging.** There is no token scope that grants
+"open pull requests but never merge", because merging needs the same two
+permissions as pushing a branch. If you want that guarantee, protect the
+branch and require a review. Instructions to an agent are a convention, not
+an enforcement.
+
+The token is in the container's environment, so `docker compose exec
+claude-remote env` reveals it. It stays out of `docker inspect`, which is
+what the file mount buys. The alternative, `gh auth login --with-token`,
+writes it to disk in `/config` instead, which is a different exposure rather
+than a smaller one.
 
 ### How Claude knows about it
 
@@ -654,7 +687,8 @@ attached: a source tree holds `.env` files and other credentials, and
 `BACKUP_MOUNT` is append-only, so anything written there cannot be retracted.
 
 **`secrets/` and `.env` are the security perimeter.** `secrets/` holds the SMB
-password, `.env` holds paths. Both are gitignored.
+password and, if you set one, a GitHub token that can push and open pull
+requests. `.env` holds paths. Both are gitignored.
 
 ## Troubleshooting
 

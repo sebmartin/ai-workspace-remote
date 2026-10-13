@@ -41,6 +41,21 @@ INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
 MARKET=aiwr
 MARKET_DIR="$CONFIG_DIR/aiwr-marketplace"
 
+# gh reads GH_TOKEN from the environment and needs no `gh auth login`, so
+# nothing is stored and there is no sign-in step. The image already pointed
+# git's credential helper at gh, so this is what lets git push too.
+#
+# Exported only when there is something to export: an empty file means this
+# deployment has no GitHub access, which is a valid way to run.
+GH_TOKEN_FILE=/run/secrets/github_token
+if [ -s "$GH_TOKEN_FILE" ]; then
+  GH_TOKEN="$(tr -d '\r\n' < "$GH_TOKEN_FILE")"
+  export GH_TOKEN
+  echo "github: GH_TOKEN loaded from the mounted secret"
+else
+  echo "github: no token, so gh and git push will not be authenticated"
+fi
+
 PLUGIN_NAME="${PLUGIN_NAME:-ai-workspace}"
 PLUGIN_REPO="${PLUGIN_REPO:-sebmartin/ai-workspace-plugin}"
 

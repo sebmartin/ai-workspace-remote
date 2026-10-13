@@ -272,6 +272,33 @@ if [ ! -s secrets/smb_password ]; then
 fi
 ok "SMB user 'claude', password in secrets/smb_password"
 
+# Optional, and the file is created either way: compose mounts it as a secret
+# and a missing file would stop the stack, while an empty one just means this
+# deployment has no GitHub access.
+if [ ! -e secrets/github_token ]; then
+  gh_tok=""
+  if [ -t 0 ]; then
+    printf '\nA GitHub token lets the agent clone, push and open pull requests\n'
+    printf 'from /src. Leave it blank to skip, and add it later by writing\n'
+    printf 'secrets/github_token yourself.\n\n'
+    printf 'Use a fine-grained token, limited to the repositories you want,\n'
+    printf 'with Contents: read and write, and Pull requests: read and write.\n'
+    printf 'Note that those permissions also allow merging, so protect any\n'
+    printf 'branch you do not want merged without a review.\n'
+    read -r -s -p "GitHub token (blank to skip): " gh_tok
+    printf '\n'
+  fi
+  ( umask 077; printf '%s' "${gh_tok}" > secrets/github_token )
+  if [ -n "${gh_tok}" ]; then did "stored the GitHub token"; else did "created an empty secrets/github_token, so no GitHub access"; fi
+  unset gh_tok
+fi
+if [ -s secrets/github_token ]; then
+  ok "GitHub token in secrets/github_token"
+else
+  note "no GitHub token, so gh and git push will not be authenticated." \
+       "Write secrets/github_token and run \`make up\` to add one."
+fi
+
 echo
 echo "Setting up ${BACKUP_MOUNT}"
 

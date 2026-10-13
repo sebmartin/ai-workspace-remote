@@ -77,6 +77,14 @@ services:
       CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
       CLAUDE_PLUGIN_PATHS: ${CLAUDE_PLUGIN_PATHS:-}
 
+    # A GitHub token for gh and for git push, so the agent can clone, branch
+    # and open pull requests. Mounted as a file rather than set here, so it
+    # stays out of `docker inspect`; the entrypoint reads it into GH_TOKEN,
+    # which is what gh and the git credential helper both use. The file is
+    # always present and may be empty, which means no GitHub access.
+    secrets:
+      - github_token
+
   samba:
     build: ./samba
     image: ai-workspace-remote-samba
@@ -128,3 +136,5 @@ services:
 secrets:
   smb_password:
     file: ./secrets/smb_password
+  github_token:
+    file: ./secrets/github_token
