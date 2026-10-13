@@ -278,9 +278,24 @@ A path dropped from the list is uninstalled on the next start.
 
 ## The workspace plugin
 
-This stack exists to run the ai-workspace plugin, so that one plugin gets its
-own settings and is installed from GitHub at a ref you choose. Nothing else
-can be pinned this way: `PLUGIN_NAME` and `PLUGIN_REPO` name a single plugin.
+This stack exists to run the ai-workspace plugin, so that one plugin has three
+settings of its own. They install **one** named plugin from GitHub at a ref.
+
+| setting | for |
+|---|---|
+| `PLUGIN_REF` | which branch, tag or commit to install |
+| `PLUGIN_REPO` | a fork, instead of `sebmartin/ai-workspace-plugin` |
+| `PLUGIN_NAME` | the plugin name in that fork, if it differs |
+
+**What this gives you that the two general settings do not** is tracking a
+moving branch with no checkout on the box: push to the branch, restart, and
+the new commit is live. That is the only reason to use it.
+
+If you have the plugin checked out under `/src`, or you install a released
+version from a marketplace, use `CLAUDE_PLUGIN_PATHS` or `CLAUDE_PLUGINS`
+instead and set `PLUGIN_REPO=none`. A fork works the same way: clone it into
+`/src`, or list your own marketplace. `PLUGIN_REPO` is only worth setting if
+you want a fork's branch tracked from the remote without cloning it.
 
 Claude installs plugins as `name@marketplace`, only from a registered
 marketplace, never straight from a repo URL, and nothing in the CLI takes a
@@ -321,10 +336,10 @@ does not cost you the plugin.
 
 Clear `PLUGIN_REF` and redeploy to go back to the default branch.
 
-Set `PLUGIN_REPO=none` to turn this off, which is what you want once you have
-the plugin checked out under `/src` and listed in `CLAUDE_PLUGIN_PATHS`
-instead. Then it is an ordinary plugin like any other and this section stops
-applying.
+Set `PLUGIN_REPO=none` to turn this off. The plugin then comes from
+`CLAUDE_PLUGIN_PATHS` or `CLAUDE_PLUGINS` like any other, and this section
+stops applying. The cost is that taking new commits becomes `git pull` in
+`/src` then `make restart`, rather than `make restart` alone.
 
 Anything else you install by hand inside the container with `claude plugin`
 persists in the mounted config directory, but it is not recorded anywhere, so
