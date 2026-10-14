@@ -37,6 +37,19 @@ claude update </dev/null || echo "WARNING: could not check for claude updates"
 CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 INSTALLED="$CONFIG_DIR/plugins/installed_plugins.json"
 
+# Written to git config rather than left in the environment, because
+# GIT_AUTHOR_* would not reach a process started by `docker compose exec`, and
+# because some tools read the config rather than the variables. $HOME is not
+# mounted, so this is rebuilt on every start.
+if [ -n "${GIT_USER_NAME:-}" ] && [ -n "${GIT_USER_EMAIL:-}" ]; then
+  git config --global user.name  "$GIT_USER_NAME"
+  git config --global user.email "$GIT_USER_EMAIL"
+  echo "git: committing as $GIT_USER_NAME <$GIT_USER_EMAIL>"
+else
+  echo "git: no identity set, so a commit under /src will fail. Set GIT_USER_NAME"
+  echo "     and GIT_USER_EMAIL in .env, or run \`make init\` to take them from this host."
+fi
+
 # An empty file is valid and means no GitHub access.
 GH_TOKEN_FILE=/run/secrets/github_token
 if [ -s "$GH_TOKEN_FILE" ]; then

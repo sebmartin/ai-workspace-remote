@@ -65,6 +65,9 @@ services:
       CLAUDE_CONFIG_DIR: /config
       # Unset means none. .env.example shows the ones worth considering.
       CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
+      # Who commits, for work in /src. `make init` takes these from the host.
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
 
     # A file rather than an environment entry here, so it stays out of
     # `docker inspect`. The entrypoint reads it into GH_TOKEN.

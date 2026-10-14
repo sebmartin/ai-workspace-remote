@@ -151,8 +151,8 @@ real one cannot run at the same time.
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
 tree, sets ownership and mode, creates the source directory and grants Claude
-access to it, takes a GitHub token if you have one, makes `workspace/` a git
-repo if it is empty,
+access to it, takes a GitHub token if you have one, records the git identity to
+commit as, makes `workspace/` a git repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -360,6 +360,22 @@ claude-remote env` reveals it. It stays out of `docker inspect`, which is
 what the file mount buys. The alternative, `gh auth login --with-token`,
 writes it to disk in `/config` instead, which is a different exposure rather
 than a smaller one.
+
+### Who commits
+
+Git needs an author, and the container has none of its own, so a commit under
+`/src` fails without this.
+
+```bash
+GIT_USER_NAME=Your Name
+GIT_USER_EMAIL=you@example.com
+```
+
+`make init` fills both in from the git config of whoever runs it, so there is
+normally nothing to set. A value already in `.env` is left alone.
+
+They are written to the container's git config at startup rather than left in
+the environment, so they also apply to a shell opened with `make shell`.
 
 ### How Claude knows about it
 

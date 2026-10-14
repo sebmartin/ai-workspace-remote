@@ -116,6 +116,25 @@ if [ "$(get WORKSPACE_UID)" != "${UID_NOW}" ] || [ "$(get WORKSPACE_GID)" != "${
   did "recorded WORKSPACE_UID=${UID_NOW} WORKSPACE_GID=${GID_NOW}"
 fi
 
+# Whoever runs this is who the agent commits as, so take the identity from
+# their git config rather than asking for it again. Only when unset: a value
+# in .env is deliberate.
+for pair in "GIT_USER_NAME:user.name" "GIT_USER_EMAIL:user.email"; do
+  key="${pair%%:*}"; gitkey="${pair#*:}"
+  if [ -z "$(get "${key}")" ]; then
+    val="$(git config --get "${gitkey}" 2>/dev/null || true)"
+    if [ -n "${val}" ]; then
+      set_key "${key}" "${val}"
+      did "${key}=${val}, from this host's git config"
+    else
+      note "${key} is unset and this host has no ${gitkey}." \
+           "Set it in .env, or a commit under /src will fail."
+    fi
+  else
+    ok "${key}=$(get "${key}")"
+  fi
+done
+
 echo
 echo "Setting up ${AIWR_ROOT}"
 
