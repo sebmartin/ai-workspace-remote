@@ -7,6 +7,12 @@
 #
 # The backup itself is not under that root. BACKUP_MOUNT names a directory on
 # storage the OS has mounted, and it arrives at /backup in the backup container.
+#
+#   ${SRC_MOUNT}            source repositories, mounted at /src
+#
+# SRC_MOUNT defaults to src/ under AIWR_ROOT. Either way it is a sibling of
+# workspace/ rather than inside it, so the snapshot and the SMB share do not
+# see it: both mount ${AIWR_ROOT}/workspace specifically. Nothing backs it up.
 
 x-env: &env
   WORKSPACE_UID: ${WORKSPACE_UID:-1000}
@@ -35,13 +41,14 @@ services:
     stdin_open: true
 
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
       # One directory, via CLAUDE_CONFIG_DIR below. Not $HOME: mounting over
       # the home would hide /home/claude/.local, where Claude and uv are
       # installed. Not two separate mounts either, because .claude.json is
       # rewritten by rename and a single-file bind mount cannot be replaced,
       # so anything Claude recorded there was silently lost on restart.
-      - ${AIWR_ROOT:?}/home:/config
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/config
+      - ${SRC_MOUNT:-${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/src}:/src
 
     # CMD in the image hardcodes the mode; overriding it here is what makes
     # CLAUDE_PERMISSION_MODE a real setting rather than a decorative one.
@@ -56,9 +63,16 @@ services:
       # Moves settings.json, plugins/ and .claude.json into one directory we
       # can mount as a directory. Everything Claude persists then survives.
       CLAUDE_CONFIG_DIR: /config
-      PLUGIN_NAME: ${PLUGIN_NAME:-}
-      PLUGIN_REPO: ${PLUGIN_REPO:-}
-      PLUGIN_REF: ${PLUGIN_REF:-}
+      # Unset means none. .env.example shows the ones worth considering.
+      CLAUDE_PLUGINS: ${CLAUDE_PLUGINS:-}
+      # Who commits, for work in /src. `make init` takes these from the host.
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+
+    # A file rather than an environment entry here, so it stays out of
+    # `docker inspect`. The entrypoint reads it into GH_TOKEN.
+    secrets:
+      - github_token
 
   samba:
     build: ./samba
@@ -69,7 +83,7 @@ services:
     ports:
       - "${SMB_BIND_IP:-0.0.0.0}:445:445"
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
     # Rebuilt from the environment every boot, so no stale credential file.
     tmpfs:
       - /var/lib/samba
@@ -92,11 +106,11 @@ services:
     user: "${WORKSPACE_UID:-1000}:${WORKSPACE_GID:-1000}"
     stop_grace_period: 60s
     volumes:
-      - ${AIWR_ROOT:?}/workspace:/workspace
-      - ${BACKUP_MOUNT:?}:/backup
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/workspace:/workspace
+      - ${BACKUP_MOUNT:?BACKUP_MOUNT is not set. Run `make init`, which asks for it and prepares the storage.}:/backup
       # Only .claude, not the whole home, so .claude.json is not merely
       # excluded from the transcript filter but absent from this container.
-      - ${AIWR_ROOT:?}/home:/claude-home:ro
+      - ${AIWR_ROOT:?AIWR_ROOT is not set. Run `make init`.}/home:/claude-home:ro
     tmpfs:
       - /tmp:mode=1777
     environment:
@@ -111,3 +125,5 @@ services:
 secrets:
   smb_password:
     file: ./secrets/smb_password
+  github_token:
+    file: ./secrets/github_token
