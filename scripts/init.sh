@@ -92,6 +92,17 @@ done
 AIWR_ROOT="$(get AIWR_ROOT)"
 BACKUP_MOUNT="$(get BACKUP_MOUNT)"
 
+# Empty means src/ under AIWR_ROOT, which is what compose falls back to.
+SRC_MOUNT="$(trim_slashes "$(get SRC_MOUNT)")"
+[ -n "${SRC_MOUNT}" ] && set_key SRC_MOUNT "${SRC_MOUNT}"
+SRC_DIR="${SRC_MOUNT:-${AIWR_ROOT}/src}"
+
+if [ -n "${SRC_MOUNT}" ]; then
+  ok "SRC_MOUNT=${SRC_MOUNT}"
+else
+  ok "SRC_MOUNT is unset, so /src is ${SRC_DIR}"
+fi
+
 for stale in NAS_HOST NAS_USER NAS_ROOT NAS_PORT; do
   [ -n "$(get "${stale}")" ] && note "${stale} is no longer used and is ignored. Delete it when you like."
 done
@@ -105,6 +116,25 @@ if [ "$(get WORKSPACE_UID)" != "${UID_NOW}" ] || [ "$(get WORKSPACE_GID)" != "${
   did "recorded WORKSPACE_UID=${UID_NOW} WORKSPACE_GID=${GID_NOW}"
 fi
 
+# Whoever runs this is who the agent commits as, so take the identity from
+# their git config rather than asking for it again. Only when unset: a value
+# in .env is deliberate.
+for pair in "GIT_USER_NAME:user.name" "GIT_USER_EMAIL:user.email"; do
+  key="${pair%%:*}"; gitkey="${pair#*:}"
+  if [ -z "$(get "${key}")" ]; then
+    val="$(git config --get "${gitkey}" 2>/dev/null || true)"
+    if [ -n "${val}" ]; then
+      set_key "${key}" "${val}"
+      did "${key}=${val}, from this host's git config"
+    else
+      note "${key} is unset and this host has no ${gitkey}." \
+           "Set it in .env, or a commit under /src will fail."
+    fi
+  else
+    ok "${key}=$(get "${key}")"
+  fi
+done
+
 echo
 echo "Setting up ${AIWR_ROOT}"
 
@@ -112,14 +142,17 @@ echo "Setting up ${AIWR_ROOT}"
 if [ -t 0 ] && [ -d "${AIWR_ROOT}" ] && [ -n "$(ls -A "${AIWR_ROOT}" 2>/dev/null)" ]; then
   if [ ! -d "${AIWR_ROOT}/workspace" ]; then
     printf '\n%s already exists and is not empty.\n' "${AIWR_ROOT}"
-    printf 'This will chown everything under it to %s and set it 0700.\n' "${UID_NOW}"
+    printf 'This will chown workspace/ and home/ under it to %s and set it 0700.\n' "${UID_NOW}"
     read -r -p "Continue? [y/N]: " reply || die "Cancelled."
     case "${reply}" in y|Y|yes) ;; *) die "Stopped. Set AIWR_ROOT to somewhere else." ;; esac
   fi
 fi
 
 sudo mkdir -p "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
-sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
+sudo chown "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}"
+# Not the whole root: src/ can sit here, and recursing into source
+# repositories would flatten any ownership set inside them.
+sudo chown -R "${UID_NOW}:${GID_NOW}" "${AIWR_ROOT}/workspace" "${AIWR_ROOT}/home"
 sudo chmod 700 "${AIWR_ROOT}"
 ok "workspace/ and home/, owned by ${UID_NOW}, root is 0700"
 
@@ -170,6 +203,33 @@ elif command -v jq >/dev/null 2>&1; then
 else
   note "jq is not installed, so ${CFG} was left as it is." \
        "If the service sits there doing nothing, run \`make login\` once."
+fi
+
+# The file tools are confined to the working directory, so /src is refused
+# without this. A setting rather than --add-dir, so it covers the sessions
+# remote-control spawns. Takes effect only once the folder is trusted, which
+# hasTrustDialogAccepted above does.
+SETTINGS="${AIWR_ROOT}/home/settings.json"
+if command -v jq >/dev/null 2>&1; then
+  [ -s "${SETTINGS}" ] || printf '{}\n' > "${SETTINGS}"
+  tmp="$(mktemp "${SETTINGS}.XXXXXX")"
+  if jq '.permissions.additionalDirectories =
+           ((.permissions.additionalDirectories // []) + ["/src"] | unique)' \
+       "${SETTINGS}" > "${tmp}" 2>/dev/null; then
+    if cmp -s "${tmp}" "${SETTINGS}"; then
+      rm -f "${tmp}"
+      ok "/src is in permissions.additionalDirectories"
+    else
+      mv "${tmp}" "${SETTINGS}"
+      did "added /src to permissions.additionalDirectories in home/settings.json"
+    fi
+  else
+    rm -f "${tmp}"; note "could not read ${SETTINGS}, leaving it alone." \
+      "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
+  fi
+else
+  note "jq is not installed, so ${SETTINGS} was left as it is." \
+       "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
 fi
 
 if [ ! -d "${AIWR_ROOT}/workspace/.git" ]; then
@@ -223,6 +283,34 @@ if [ ! -s secrets/smb_password ]; then
   unset smb_pw
 fi
 ok "SMB user 'claude', password in secrets/smb_password"
+
+# Created either way: compose mounts it, so a missing file stops the stack.
+if [ ! -e secrets/github_token ]; then
+  gh_tok=""
+  if [ -t 0 ]; then
+    printf '\nA GitHub token lets the agent clone, push and open pull requests\n'
+    printf 'from /src. Leave it blank to skip, and add it later by writing\n'
+    printf 'secrets/github_token yourself.\n\n'
+    # The permissions and a name are prefilled from the query string, so the
+    # only thing left to pick is which repositories it covers.
+    printf 'Generate one here, then pick the repositories it covers:\n'
+    printf '  https://github.com/settings/personal-access-tokens/new'
+    printf '?name=ai-workspace-remote&contents=write&pull_requests=write\n\n'
+    printf 'Those permissions also allow merging. Protect any branch you do not\n'
+    printf 'want merged without a review.\n'
+    read -r -s -p "GitHub token (blank to skip): " gh_tok
+    printf '\n'
+  fi
+  ( umask 077; printf '%s' "${gh_tok}" > secrets/github_token )
+  if [ -n "${gh_tok}" ]; then did "stored the GitHub token"; else did "created an empty secrets/github_token, so no GitHub access"; fi
+  unset gh_tok
+fi
+if [ -s secrets/github_token ]; then
+  ok "GitHub token in secrets/github_token"
+else
+  note "no GitHub token, so gh and git push will not be authenticated." \
+       "Write secrets/github_token and run \`make up\` to add one."
+fi
 
 echo
 echo "Setting up ${BACKUP_MOUNT}"
@@ -282,6 +370,40 @@ did "wrote ${BACKUP_MOUNT}/README.md"
 # its absence as "the storage is not mounted" and refuse to write.
 touch "${BACKUP_MOUNT}/.aiwr-backup"
 ok "backup storage ready and marked"
+
+echo
+echo "Setting up ${SRC_DIR}"
+
+# Docker would otherwise create it as root, leaving Claude unable to write.
+if [ -z "${SRC_MOUNT}" ]; then
+  sudo mkdir -p "${SRC_DIR}"
+  sudo chown "${UID_NOW}:${GID_NOW}" "${SRC_DIR}"
+else
+  # No sudo, so that creating it proves the container's uid can write there.
+  mkdir -p "${SRC_DIR}" 2>/dev/null \
+    || die "Cannot create ${SRC_DIR}." "Create it yourself, or point SRC_MOUNT somewhere writable by $(id -un)."
+fi
+ok "source repositories, mounted at /src"
+
+# Never overwritten: an existing one knows more about how the directory is
+# used than this script does.
+if [ ! -e "${SRC_DIR}/CLAUDE.md" ]; then
+  cat > "${SRC_DIR}/CLAUDE.md" <<'MD'
+# /src
+
+Source repositories, for coding work. Clone them here, one directory each.
+
+This is not the workspace. `/workspace` holds the markdown threads this
+machine exists to keep, and it is snapshotted hourly and shared over SMB.
+`/src` is neither of those things, and **nothing backs it up**: a repository
+here exists only on this machine until its commits are pushed. So push.
+
+Replace this file with whatever is actually useful. Nothing overwrites it.
+MD
+  did "wrote a starter CLAUDE.md in the source directory"
+fi
+
+note "/src is not backed up. Push your work, or it only exists on this machine."
 
 echo
 echo "Ready. Review .env if you want to change anything, then:"

@@ -38,8 +38,10 @@ flowchart TB
         smb["samba"]
         bk["backup"]
         ws[("/workspace<br>local disk, git repo")]
+        src[("/src<br>source repos<br>not backed up")]
 
         claude <--> ws
+        claude <--> src
         smb <--> ws
         ws -.-> bk
     end
@@ -118,6 +120,9 @@ everything live, and where does the backup go.
 | `AIWR_ROOT` | one directory holding everything this stack owns |
 | `BACKUP_MOUNT` | a directory on storage the OS has already mounted |
 
+Neither has a default, and if either is missing `make up` and `make rebuild`
+stop before doing anything and name it.
+
 Everything else in `.env` has a working default and can be left alone.
 `WORKSPACE_UID` and `WORKSPACE_GID` are written by `make init` from whoever
 runs it, so they always match the files on disk.
@@ -128,6 +133,7 @@ runs it, so they always match the files on disk.
 $AIWR_ROOT/
   workspace/   the git repo, shared over SMB, where the agent works
   home/        Claude's home, so .claude/ and .claude.json
+  src/         source repositories, unless SRC_MOUNT points elsewhere
 ```
 
 `home/` is a sibling of `workspace/` and not a child, deliberately. Inside the
@@ -144,7 +150,9 @@ real one cannot run at the same time.
 ### What init does
 
 It creates `.env` if it is missing and asks for anything it needs, creates the
-tree, sets ownership and mode, makes `workspace/` a git repo if it is empty,
+tree, sets ownership and mode, creates the source directory and grants Claude
+access to it, takes a GitHub token if you have one, records the git identity to
+commit as, makes `workspace/` a git repo if it is empty,
 writes a starter `.gitignore` and `.claude.json`, generates the SMB password,
 creates the backup repo, and marks the storage. It stops with a named problem
 rather than doing half of it.
@@ -168,7 +176,7 @@ needed the backup. If the file is gone, the jobs refuse to run and say so in
 volume mount, a port, a hostname, a command or an environment variable, and all
 of those are fixed when a container is created. Nothing needs a rebuild.
 `make restart` does neither, which is why it is only for picking up a new
-Claude version or new commits on the same plugin ref.
+Claude version, or new plugin commits on a ref or in `/src`.
 
 **The workspace filesystem needs `user.*` extended attributes.** ext4, xfs and
 btrfs are fine. Samba's `streams_xattr` needs them, so pointing `AIWR_ROOT` at
@@ -214,50 +222,176 @@ if Windows is a first-class client: add `Thumbs.db` and `desktop.ini` to
 `veto files`, and lower `server min protocol` if you need to support anything
 older than Windows 8, which is where SMB3 and encryption arrived.
 
-## Plugins, and pinning one to a branch
+## Plugins
 
-Claude installs plugins as `name@marketplace`, only from a registered
-marketplace, never straight from a repo URL, and nothing in the CLI takes a
-git ref. So the container keeps its own single-entry marketplace on disk and
-writes the repo and ref into its manifest. It is rebuilt on every start, so
-switching refs needs no cleanup.
-
-The plugin is installed on every start. `PLUGIN_REPO` and `PLUGIN_NAME`
-default to the ai-workspace plugin, so the only thing you normally set is the
-ref:
+One setting, space separated. Empty means none, because which plugins a
+workspace wants is a deployment's choice rather than this repo's.
 
 ```bash
-PLUGIN_REF=my-big-revamp        # branch, tag or sha; empty for the default branch
+CLAUDE_PLUGINS=superpowers@anthropics/claude-plugins-official ai-workspace@sebmartin/ai-workspace-plugin#release/3 /src/my-plugin
 ```
+
+That gets long, and `.env` has no line continuation: a bare wrap or a trailing
+backslash both fail with `unexpected character "@" in variable name`. Double
+quotes spanning lines do work, and are easier to read:
 
 ```bash
-docker compose up -d            # recreate with the new setting
-make plugins                    # confirm what is actually live
+CLAUDE_PLUGINS="superpowers@anthropics/claude-plugins-official
+                ai-workspace@sebmartin/ai-workspace-plugin#release/3
+                /src/my-plugin"
 ```
 
-`PLUGIN_REF` takes a branch, a tag, or a full 40 character commit. A short
-commit does not work, and neither does putting a commit where a branch goes:
-they are different fields in the manifest, so the entrypoint looks at the
-value and writes whichever one fits.
+Three kinds of entry, told apart by shape:
 
-On every start the ref is resolved to a commit with `git ls-remote` and
-compared against the commit that is installed. They differ, it reinstalls.
-They match, it does nothing.
+| entry | source |
+|---|---|
+| `/src/my-plugin` | a directory you are working in |
+| `name@owner/repo#ref` | a plugin repo at a branch, tag or commit |
+| `name@source` | a marketplace, installed by version |
 
-That comparison is what makes pushing to a branch and restarting pick up the
-new commit. Both the install cache and `plugin update` are keyed on the
-version in `plugin.json`, so an updated branch otherwise reports "already at
-the latest version" and keeps serving the old commit.
+Then `make up` to recreate, and `make plugins` to confirm what is live.
 
-Leaving `PLUGIN_REF` empty resolves the default branch, so it behaves exactly
-as naming that branch does. If the commit cannot be resolved, nothing is
-uninstalled and the installed copy keeps working, so a network outage at boot
-does not cost you the plugin.
+### A directory you are working in
 
-Clear `PLUGIN_REF` and redeploy to go back to the default branch.
+A plugin being worked on is not in any marketplace, so the container generates
+one, symlinking each path into it. The path needs a `.claude-plugin/plugin.json`,
+and the `name` in it is the name the plugin is installed under.
 
-Any other plugins you want are installed by hand inside the container with
-`claude plugin`, and persist in the mounted `.claude`.
+**Reinstalled from disk on every start, so edits take effect on `make restart`
+rather than on save.** Installing copies the plugin into the config directory
+under its version number, and `plugin update` only notices a bumped version, so
+a plugin edited without a version bump otherwise reports "already at the latest
+version" and keeps serving the old copy.
+
+### A plugin repo at a ref
+
+For a plugin that has no marketplace, or one you want pinned. Claude installs
+plugins as `name@marketplace`, only from a registered marketplace, never
+straight from a repo URL, and nothing in the CLI takes a git ref. So the
+container writes the repo and ref into the manifest it generates.
+
+The ref is a branch, a tag, a full 40 character commit, or `HEAD` for the
+default branch. A short commit does not work, and neither does putting a commit
+where a branch goes: they are different fields in the manifest, so the
+entrypoint looks at the value and writes whichever one fits.
+
+On every start the ref is resolved with `git ls-remote` and compared against
+the commit that is installed. They differ, it reinstalls. They match, it does
+nothing. That comparison is what makes pushing to a branch and restarting pick
+up the new commit, since `plugin update` would otherwise report "already at the
+latest version". If the ref cannot be resolved, nothing is uninstalled and the
+installed copy keeps working, so a network outage at boot does not cost you the
+plugin.
+
+This is how the workspace plugin is normally installed, and a fork is the same
+entry with a different repo.
+
+### A marketplace
+
+A released plugin has a version number, so nothing needs pinning. The source is
+a GitHub repo, a URL or a path, and the container registers it before
+installing.
+
+A marketplace's name comes from its own manifest rather than its path, so the
+entrypoint reads back the name that registering recorded. A bare name with no
+slash, like `superpowers@claude-plugins-official`, is taken as a marketplace
+already registered in the container. `claude plugin marketplace list` shows
+those.
+
+### Removing one
+
+Drop it from the list and restart. Anything the container installed that is no
+longer listed is uninstalled on the next start.
+
+Anything you install by hand inside the container with `claude plugin` persists
+in the mounted config directory, but it is not recorded anywhere, so prefer the
+setting above for anything you would want back after a rebuild.
+
+## Source code, for coding work
+
+Claude works on source code in `/src`, which is `src/` under `AIWR_ROOT` by
+default. Set `SRC_MOUNT` only if your code lives somewhere else:
+
+```bash
+SRC_MOUNT=/srv/src
+```
+
+Either way it is a sibling of `workspace/` and not inside it. That is what
+keeps it out of the hourly snapshot and the SMB share, since both of those
+mount `$AIWR_ROOT/workspace` specifically rather than the root. It is also
+mounted only into `claude-remote`, so the backup container cannot see it at
+all.
+
+The consequence is the thing to know: **`/src` is not backed up.** Nothing on
+`BACKUP_MOUNT` covers it. Work that has not been pushed exists only on this
+machine, and only until the disk does not. Push branches as you go.
+
+### Working with GitHub
+
+`gh` is in the image, from GitHub's own apt repo rather than Debian's, which
+ships a version from early 2024. With a token the agent can clone, branch,
+push and open pull requests from `/src`.
+
+The token goes in `secrets/github_token`, which `make init` asks for and
+always creates, empty if you skip it. Compose mounts it as a secret, and the
+entrypoint reads it into `GH_TOKEN` only when it is not empty. An empty file
+means this deployment has no GitHub access, which is a valid way to run:
+public clones still work, and only authenticated operations fail.
+
+There is no sign-in step. `gh` reads `GH_TOKEN` from the environment and
+stores nothing, so nothing has to persist and nothing survives in `/config`.
+The image points git's credential helper at `gh`, so `git push` uses the same
+token.
+
+Use a fine-grained token limited to the repositories you want.
+[This link](https://github.com/settings/personal-access-tokens/new?name=ai-workspace-remote&contents=write&pull_requests=write)
+prefills the name and the two permissions it needs, `Contents: write` and
+`Pull requests: write`, leaving you to pick the repositories. `make init`
+prints it too.
+
+**Those permissions also allow merging.** There is no token scope that grants
+"open pull requests but never merge", because merging needs the same two
+permissions as pushing a branch. If you want that guarantee, protect the
+branch and require a review. Instructions to an agent are a convention, not
+an enforcement.
+
+The token is in the container's environment, so `docker compose exec
+claude-remote env` reveals it. It stays out of `docker inspect`, which is
+what the file mount buys. The alternative, `gh auth login --with-token`,
+writes it to disk in `/config` instead, which is a different exposure rather
+than a smaller one.
+
+### Who commits
+
+Git needs an author, and the container has none of its own, so a commit under
+`/src` fails without this.
+
+```bash
+GIT_USER_NAME=Your Name
+GIT_USER_EMAIL=you@example.com
+```
+
+`make init` fills both in from the git config of whoever runs it, so there is
+normally nothing to set. A value already in `.env` is left alone.
+
+They are written to the container's git config at startup rather than left in
+the environment, so they also apply to a shell opened with `make shell`.
+
+### How Claude knows about it
+
+Two things, both set up by `make init`.
+
+Claude confines its file tools to the working directory, which is
+`/workspace`, so `/src` would be refused. `init` adds it to
+`permissions.additionalDirectories` in `home/settings.json`, which applies to
+every session including the ones remote-control spawns. That is why it is a
+setting rather than `--add-dir` on the command line.
+
+Nothing otherwise says what the directory is for, and an agent working in
+`/workspace` has no reason to guess, so `init` also writes a starter
+`CLAUDE.md` at the root of the source directory. **It only does this when
+there is no `CLAUDE.md` there.** One that already exists explains how you
+actually use the directory, so it wins and is never touched.
 
 ## The device name in claude.ai
 
@@ -468,7 +602,7 @@ Do this once before relying on it.
 make ps          # container status, plus the backup container's health
 make logs        # follow
 make restart     # restart claude-remote, which is the whole update ritual
-make plugins     # which plugin version and ref is live
+make plugins     # which plugins and versions are live
 make init        # set up, or re-check, everything .env describes
 make backup-now  # force a snapshot and a transcript copy
 make rebuild     # refresh base images and apt packages
@@ -476,7 +610,15 @@ make check       # validate the compose file and the shell scripts
 ```
 
 `make up` builds anything stale and starts the stack, so it is also how you
-apply a change to a Dockerfile or an entrypoint.
+apply a change to a Dockerfile or an entrypoint. `make restart` does not,
+because the entrypoint is copied into the image rather than read from disk.
+
+### After pulling a new version
+
+Run `make init` before `make up`. It is idempotent, and it is what creates
+anything a new version expects that your existing tree does not have. If
+something required is missing, `make up` stops and names the variable rather
+than starting a half-configured stack.
 
 Use `docker compose exec`, never `docker attach`. Attaching to a `tty: true`
 container running the remote-control server drops you into its stdio, and a
@@ -538,8 +680,18 @@ previously lived on a NAS with RAID, be aware you have traded that for this.
 Whether the backup is on a different machine is now your choice, since any
 mount will do. A second internal disk does not survive what takes the box out.
 
+**`/src` is not backed up.** It is a sibling of `workspace/`, and the backup
+container mounts `workspace/` rather than the root, so nothing there reaches
+it. Pointing the existing mechanism at it would not work either: that is a git
+journal, and source repositories carry their own nested `.git`, which a
+containing repository cannot track. Backing them up needs a different one, and it has not been built, so
+unpushed work under `/src` has no copy anywhere. It also has a question
+attached: a source tree holds `.env` files and other credentials, and
+`BACKUP_MOUNT` is append-only, so anything written there cannot be retracted.
+
 **`secrets/` and `.env` are the security perimeter.** `secrets/` holds the SMB
-password, `.env` holds paths. Both are gitignored.
+password and, if you set one, a GitHub token that can push and open pull
+requests. `.env` holds paths. Both are gitignored.
 
 ## Troubleshooting
 
