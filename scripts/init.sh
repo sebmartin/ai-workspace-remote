@@ -12,7 +12,7 @@ ENV_FILE=.env
 
 ok()  { printf '  \033[32mok\033[0m    %s\n' "$1"; }
 did() { printf '  \033[36mdid\033[0m   %s\n' "$1"; }
-note(){ printf '  \033[33mnote\033[0m  %s\n' "$1"; }
+note(){ printf '  \033[33mnote\033[0m  %s\n' "$1"; shift; [ $# -gt 0 ] && printf '        %s\n' "$@"; return 0; }
 die() { printf '\n\033[31m%s\033[0m\n' "$1" >&2; [ $# -gt 1 ] && printf '%s\n' "$2" >&2; exit 1; }
 
 # Read a key without sourcing, so a stray line in .env cannot execute.
@@ -213,22 +213,25 @@ SETTINGS="${AIWR_ROOT}/home/settings.json"
 if command -v jq >/dev/null 2>&1; then
   [ -s "${SETTINGS}" ] || printf '{}\n' > "${SETTINGS}"
   tmp="$(mktemp "${SETTINGS}.XXXXXX")"
+  # Auto memory starts off. //= only fills in a missing key, so turning it
+  # back on with /memory survives a later `make init`.
   if jq '.permissions.additionalDirectories =
-           ((.permissions.additionalDirectories // []) + ["/src"] | unique)' \
+           ((.permissions.additionalDirectories // []) + ["/src"] | unique)
+         | .autoMemoryEnabled //= false' \
        "${SETTINGS}" > "${tmp}" 2>/dev/null; then
     if cmp -s "${tmp}" "${SETTINGS}"; then
       rm -f "${tmp}"
-      ok "/src is in permissions.additionalDirectories"
+      ok "/src is in permissions.additionalDirectories and autoMemoryEnabled is set"
     else
       mv "${tmp}" "${SETTINGS}"
-      did "added /src to permissions.additionalDirectories in home/settings.json"
+      did "set /src in permissions.additionalDirectories and a default for autoMemoryEnabled in home/settings.json"
     fi
   else
-    rm -f "${tmp}"; note "could not read ${SETTINGS}, leaving it alone." \
+    rm -f "${tmp}"; note "could not read ${SETTINGS}, leaving it alone, so auto memory stays on." \
       "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
   fi
 else
-  note "jq is not installed, so ${SETTINGS} was left as it is." \
+  note "jq is not installed, so ${SETTINGS} was left as it is and auto memory stays on." \
        "Claude will refuse to touch /src until it lists /src in permissions.additionalDirectories."
 fi
 
